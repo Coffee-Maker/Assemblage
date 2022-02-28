@@ -15,19 +15,21 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
+use crate::rendering::mesh::Mesh;
 
 use crate::voxels::voxel_scene::VoxelScene;
 
-#[tokio::main]
-async fn main() -> Result<(), ()> {
+fn main() -> Result<(), ()> {
     env_logger::init(); // Tells WGPU to inform us of errors, rather than failing silently
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap(); // Create a window
     let mut scene = VoxelScene::new();
-    let mut state = State::new(&window).await;
+    let mut state = pollster::block_on(State::new(&window));
 
-    generate_world(&mut scene, &mut state, UVec3::new(50, 1, 50)).await;
+    pollster::block_on(
+        generate_world(&mut scene, &mut state, UVec3::new(50, 1, 50))
+    );
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -102,14 +104,10 @@ pub async fn generate_world(scene: &mut VoxelScene, state: &mut State, size: UVe
 
     let pass = state.render_passes.last_mut().unwrap();
 
-    let mut combined_verts = Vec::new();
-    let mut combined_indices = Vec::new();
-
-    scene.chunks.iter_mut().for_each(|(position, chunk)| {
+    let meshes = scene.chunks.par_iter_mut().map(|(position, chunk)| {
         let mesh = &mut chunk.mesh;
-        let offset = combined_verts.len() as u32;
 
-        mesh.vertices.par_iter_mut().for_each(|vert| {
+        mesh.vertices.iter_mut().for_each(|vert| {
             vert.position = [
                 vert.position[0] + (position.x as f32 * CHUNK_SIZE as f32),
                 vert.position[1] + (position.y as f32 * CHUNK_SIZE as f32),
@@ -117,11 +115,18 @@ pub async fn generate_world(scene: &mut VoxelScene, state: &mut State, size: UVe
             ]
         });
 
-        combined_verts.append(&mut mesh.vertices);
+        mesh
+    }).collect::<Vec<&mut Mesh>>();
 
-        mesh.indices.iter().for_each(|i| {
-            combined_indices.push(i + offset);
-        });
+    let mut combined_verts = Vec::new();
+    let mut combined_indices = Vec::new();
+    meshes.into_iter().map(|mesh| (&mut mesh.vertices, &mut mesh.indices)).for_each(|(verts, indics)| {
+        let offset = combined_verts.len() as u32;
+
+        combined_verts.append(verts);
+
+        combined_indices.reserve(indics.len());
+        combined_indices.extend(indics.iter().map(|&x| x + offset));
     });
 
     pass.set_vertices(&state.device, &mut combined_verts);
@@ -133,6 +138,6 @@ pub async fn generate_world(scene: &mut VoxelScene, state: &mut State, size: UVe
         "Generated {} chunks\nGeneration took {:.2?} per chunk\nWhich is {} chunks per second",
         total_chunk_count,
         elapsed / total_chunk_count,
-        1.0 / (elapsed / total_chunk_count).as_secs_f32()
+        1.0 / (elapsed / total_chunk_count).as_secs_f32(),
     );
 }

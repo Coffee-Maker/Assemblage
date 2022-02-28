@@ -73,11 +73,11 @@ impl VoxelScene {
             let chunk_pos_scenespace = chunk.scenespace_pos();
             chunk
                 .voxels
-                .par_iter_mut()
+                .iter_mut()
                 .enumerate()
                 .for_each(|(x, arr0)| {
-                    arr0.par_iter_mut().enumerate().for_each(|(y, arr1)| {
-                        arr1.par_iter_mut().enumerate().for_each(|(z, voxel)| {
+                    arr0.iter_mut().enumerate().for_each(|(y, arr1)| {
+                        arr1.iter_mut().enumerate().for_each(|(z, voxel)| {
                             voxel.shape = if get_density(
                                 IVec3::new(
                                     chunk_pos_scenespace.x + x as i32,
