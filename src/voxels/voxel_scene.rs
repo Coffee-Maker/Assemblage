@@ -203,7 +203,7 @@ fn generate_faces(
 ) {
     let position = position.as_ivec3();
     let f_position = position.as_vec3();
-    let global_position = position + (chunk.position * CHUNK_SIZE as i32);
+    let global_position = position + chunk.scenespace_pos();
 
     let face_check = |offset: IVec3, space_requirement: VoxelShape| {
         chunk
@@ -221,13 +221,14 @@ fn generate_faces(
             offset + 2,
             offset + 3,
         ]);
-
+        vertices.reserve(4);
+        
         // v0
         vertices.push(Vertex {
             position: [
-                quad_verts[0][0] + f_position.x as f32,
-                quad_verts[0][1] + f_position.y as f32,
-                quad_verts[0][2] + f_position.z as f32,
+                quad_verts[0][0] + f_position.x,
+                quad_verts[0][1] + f_position.y,
+                quad_verts[0][2] + f_position.z,
             ],
             color: [1.0, 1.0, 1.0],
             normal,
@@ -237,9 +238,9 @@ fn generate_faces(
         // v1
         vertices.push(Vertex {
             position: [
-                quad_verts[1][0] + f_position.x as f32,
-                quad_verts[1][1] + f_position.y as f32,
-                quad_verts[1][2] + f_position.z as f32,
+                quad_verts[1][0] + f_position.x,
+                quad_verts[1][1] + f_position.y,
+                quad_verts[1][2] + f_position.z,
             ],
             color: [1.0, 1.0, 1.0],
             normal,
@@ -249,9 +250,9 @@ fn generate_faces(
         // v2
         vertices.push(Vertex {
             position: [
-                quad_verts[2][0] + f_position.x as f32,
-                quad_verts[2][1] + f_position.y as f32,
-                quad_verts[2][2] + f_position.z as f32,
+                quad_verts[2][0] + f_position.x,
+                quad_verts[2][1] + f_position.y,
+                quad_verts[2][2] + f_position.z,
             ],
             color: [1.0, 1.0, 1.0],
             normal,
@@ -261,9 +262,9 @@ fn generate_faces(
         // v3
         vertices.push(Vertex {
             position: [
-                quad_verts[3][0] + f_position.x as f32,
-                quad_verts[3][1] + f_position.y as f32,
-                quad_verts[3][2] + f_position.z as f32,
+                quad_verts[3][0] + f_position.x,
+                quad_verts[3][1] + f_position.y,
+                quad_verts[3][2] + f_position.z,
             ],
             color: [1.0, 1.0, 1.0],
             normal,

@@ -4,12 +4,12 @@ use winit::event::VirtualKeyCode;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-use crate::rendering::camera::Camera;
 use crate::camera_controller::CameraController;
+use crate::rendering::camera::Camera;
 use crate::rendering::camera::CameraUniform;
+use crate::rendering::render_pass_data::RenderPassData;
 use crate::rendering::texture;
 use crate::rendering::vertex::Vertex;
-use crate::rendering::render_pass_data::RenderPassData;
 
 use wgpu::util::DeviceExt;
 
