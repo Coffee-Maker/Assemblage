@@ -5,11 +5,13 @@ mod rendering;
 mod state;
 mod voxels;
 
+use std::{sync::{Arc, Mutex}, thread::{Thread, self}, time::Duration};
+
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use state::*;
 use voxels::voxel_scene::CHUNK_SIZE;
 
 use glam::{IVec3, UVec3};
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -24,10 +26,11 @@ async fn main() -> Result<(), ()> {
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap(); // Create a window
-    let mut scene = VoxelScene::new();
-    let mut state = State::new(&window).await;
+    let scene = Arc::new(Mutex::new(VoxelScene::new()));
+    let state = Arc::new(Mutex::new(State::new(&window).await));
 
-    generate_world(&mut scene, &mut state, UVec3::new(50, 1, 50)).await;
+    let state_clone = Arc::clone(&state);
+    generate_world(scene, state_clone, UVec3::new(50, 1, 50)).await;
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -35,7 +38,8 @@ async fn main() -> Result<(), ()> {
                 ref event,
                 window_id,
             } if window_id == window.id() => {
-                if !state.input(event) {
+                let mut state_lock = state.lock().unwrap();
+                if !state_lock.input(event) {
                     match event {
                         WindowEvent::CloseRequested
                         | WindowEvent::KeyboardInput {
@@ -48,10 +52,10 @@ async fn main() -> Result<(), ()> {
                             ..
                         } => *control_flow = ControlFlow::Exit,
                         WindowEvent::Resized(physical_size) => {
-                            state.resize(*physical_size);
+                            state_lock.resize(*physical_size);
                         }
                         WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                            state.resize(**new_inner_size);
+                            state_lock.resize(**new_inner_size);
                         }
                         _ => {}
                     }
@@ -59,11 +63,15 @@ async fn main() -> Result<(), ()> {
             }
 
             Event::RedrawRequested(window_id) if window_id == window.id() => {
-                state.update();
-                match state.render() {
+                let mut state_lock = state.lock().unwrap();
+                state_lock.update();
+                match state_lock.render() {
                     Ok(_) => {}
                     // Reconfigure the surface if lost
-                    Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
+                    Err(wgpu::SurfaceError::Lost) => {
+                        let size = state_lock.size;
+                        state_lock.resize(size)
+                    } ,
                     // The system is out of memory, we should probably quit
                     Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
                     // All other errors (Outdated, Timeout) should be resolved by the next frame
@@ -80,69 +88,86 @@ async fn main() -> Result<(), ()> {
     });
 }
 
-pub async fn generate_world(scene: &mut VoxelScene, state: &mut State, size: UVec3) {
-    state.render_passes.clear();
-    state.add_render_pass();
-
-    // Start timer
-    let total_chunk_count = size.x * size.y * size.z;
-
-    use std::time::Instant;
-    let now = Instant::now();
+pub async fn generate_world(scene: Arc<Mutex<VoxelScene>>, state: Arc<Mutex<State>>, size: UVec3) {
+    
+    let mut state_lock = state.lock().unwrap();
+    state_lock.render_passes.clear();
+    state_lock.add_render_pass();
 
     for x in 0..size.x {
         for y in 0..size.y {
             for z in 0..size.z {
-                scene.initialize_chunk(&IVec3::new(x as i32, y as i32, z as i32));
+                let mut scene_lock = scene.lock().unwrap();
+                scene_lock.initialize_chunk(&IVec3::new(x as i32, y as i32, z as i32));
             }
         }
     }
 
-    scene.process_initialization_queue().await;
+    // Start initialization and generation threads
+    for i in 0..10 {
+        let scene_clone = Arc::clone(&scene);
+        VoxelScene::process_initialization_queue(scene_clone);
+    }
+    for i in 0..10 {
+        let scene_clone = Arc::clone(&scene);
+        VoxelScene::process_generation_queue(scene_clone);
+    }
 
-    let pass = state.render_passes.last_mut().unwrap();
+    
+    // Regenerate mesh when a mesh is ready for submission
+    let scene_clone = Arc::clone(&scene);
+    let state_clone = Arc::clone(&state);
+    rayon::spawn(move || {
+        loop {
+            let mut scene_lock = scene_clone.lock().unwrap();
+            if scene_lock.chunk_submission_queue.len() == 0 {
+                drop(scene_lock);
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            scene_lock.chunk_submission_queue.clear();
 
-    let meshes = scene
-        .chunks
-        .par_iter_mut()
-        .map(|(position, chunk)| {
-            let mesh = &mut chunk.mesh;
+            let meshes = scene_lock
+                .chunks
+                .par_iter_mut()
+                .map(|(position, chunk)| {
+                    let mut mesh = chunk.mesh.clone();
+        
+                    mesh.vertices.iter_mut().for_each(|vert| {
+                        vert.position = [
+                            vert.position[0] + (position.x as f32 * CHUNK_SIZE as f32),
+                            vert.position[1] + (position.y as f32 * CHUNK_SIZE as f32),
+                            vert.position[2] + (position.z as f32 * CHUNK_SIZE as f32),
+                        ]
+                    });
+        
+                    mesh
+                })
+                .collect::<Vec<Mesh>>();
+        
+            let mut combined_verts = Vec::new();
+            let mut combined_indices = Vec::new();
+            meshes
+                .into_iter()
+                .map(|mesh| (mesh.vertices, mesh.indices))
+                .for_each(|(mut verts, indics)| {
+                    let offset = combined_verts.len() as u32;
+        
+                    combined_verts.append(&mut verts);
+        
+                    combined_indices.reserve(indics.len());
+                    combined_indices.extend(indics.iter().map(|&x| x + offset));
+                });
 
-            mesh.vertices.iter_mut().for_each(|vert| {
-                vert.position = [
-                    vert.position[0] + (position.x as f32 * CHUNK_SIZE as f32),
-                    vert.position[1] + (position.y as f32 * CHUNK_SIZE as f32),
-                    vert.position[2] + (position.z as f32 * CHUNK_SIZE as f32),
-                ]
-            });
+            let mut state_lock = state_clone.lock().unwrap();
+            let pass_index = state_lock.render_passes.len() - 1;
+            let mut pass = state_lock.render_passes.remove(pass_index);
 
-            mesh
-        })
-        .collect::<Vec<&mut Mesh>>();
+            pass.set_vertices(&state_lock.device, &mut combined_verts);
+            pass.set_indices(&state_lock.device, &mut combined_indices);
 
-    let mut combined_verts = Vec::new();
-    let mut combined_indices = Vec::new();
-    meshes
-        .into_iter()
-        .map(|mesh| (&mut mesh.vertices, &mut mesh.indices))
-        .for_each(|(verts, indics)| {
-            let offset = combined_verts.len() as u32;
-
-            combined_verts.append(verts);
-
-            combined_indices.reserve(indics.len());
-            combined_indices.extend(indics.iter().map(|&x| x + offset));
-        });
-
-    pass.set_vertices(&state.device, &mut combined_verts);
-    pass.set_indices(&state.device, &mut combined_indices);
-
-    // End timer
-    let elapsed = now.elapsed();
-    println!(
-        "Generated {} chunks in {elapsed:.2?}\nGeneration took {:.2?} per chunk\nWhich is {} chunks per second",
-        total_chunk_count,
-        elapsed / total_chunk_count,
-        1.0 / (elapsed / total_chunk_count).as_secs_f32()
-    );
+            state_lock.render_passes.push(pass);
+        }
+    });
+    
 }

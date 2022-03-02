@@ -1,14 +1,12 @@
-use super::vertex::Vertex;
+use super::{mesh::Mesh, vertex::Vertex};
 use wgpu::util::DeviceExt;
 
 pub struct RenderPassData {
     pub render_pipeline: wgpu::RenderPipeline,
-
     pub vertex_buffer: wgpu::Buffer,
     pub vertex_count: u32,
     pub index_buffer: wgpu::Buffer,
     pub index_count: u32,
-
     pub diffuse_bind_group: wgpu::BindGroup,
 }
 

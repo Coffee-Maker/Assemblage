@@ -48,7 +48,7 @@ fn lerp4(a: vec4<f32>, b: vec4<f32>, t: f32) -> vec4<f32>{
  // Fragment shader
 [[stage(fragment)]]
 fn fs_main(in: VertexOutput) -> [[location(0)]] vec4<f32> {
-    var col: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.uv);
+    var col: vec4<f32> = vec4<f32>(in.color, 1.0); //textureSample(t_diffuse, s_diffuse, in.uv) * in.color;
 
     var light_dir: vec3<f32> = normalize(vec3<f32>(-0.5, 0.6, -0.3));
     var ambient_light: f32 = 0.5;

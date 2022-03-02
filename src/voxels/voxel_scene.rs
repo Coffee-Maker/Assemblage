@@ -1,5 +1,9 @@
 use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
+use crossbeam::atomic::AtomicCell;
 use glam::{IVec3, UVec3};
 use noise::{NoiseFn, Perlin};
 use rayon::prelude::*;
@@ -12,7 +16,9 @@ pub const CHUNK_SIZE: u32 = 8;
 
 pub struct VoxelScene {
     pub chunks: HashMap<IVec3, VoxelChunk>,
-    chunk_initialize_queue: VecDeque<IVec3>,
+    pub chunk_initialize_queue: VecDeque<IVec3>,
+    pub chunk_generation_queue: VecDeque<IVec3>,
+    pub chunk_submission_queue: VecDeque<IVec3>,
 }
 
 impl VoxelScene {
@@ -20,6 +26,8 @@ impl VoxelScene {
         Self {
             chunks: HashMap::default(),
             chunk_initialize_queue: VecDeque::new(),
+            chunk_generation_queue: VecDeque::new(),
+            chunk_submission_queue: VecDeque::new(),
         }
     }
 
@@ -59,43 +67,77 @@ impl VoxelScene {
         self.chunk_initialize_queue.push_back(*position);
     }
 
-    pub async fn process_initialization_queue(&mut self) {
-        // Build and register chunk
-        while self.chunk_initialize_queue.len() > 0 {
-            let chunk_pos = self.chunk_initialize_queue.pop_front().unwrap();
-            let chunk = VoxelChunk::new(chunk_pos);
-            self.register_chunk(chunk);
-        }
+    pub fn process_initialization_queue(scene: Arc<Mutex<VoxelScene>>) {
+        rayon::spawn(move || {
+            loop {
+                let mut scene_lock = scene.lock().unwrap();
+                if scene_lock.chunk_initialize_queue.len() == 0 {
+                    drop(scene_lock);
+                    continue;
+                }
+    
+                let chunk_pos = scene_lock.chunk_initialize_queue.pop_front().unwrap();
+                drop(scene_lock);
 
-        // Set chunk data
-        let noise = Perlin::new();
-        self.chunks.par_iter_mut().for_each(|(_chunk_pos, chunk)| {
-            let chunk_pos_scenespace = chunk.scenespace_pos();
-            chunk
-                .voxels
-                .par_iter_mut()
-                .enumerate()
-                .for_each(|(x, arr0)| {
-                    arr0.par_iter_mut().enumerate().for_each(|(y, arr1)| {
-                        arr1.par_iter_mut().enumerate().for_each(|(z, voxel)| {
-                            voxel.shape = if get_density(
-                                IVec3::new(
-                                    chunk_pos_scenespace.x + x as i32,
-                                    chunk_pos_scenespace.y + y as i32,
-                                    chunk_pos_scenespace.z + z as i32,
-                                ),
-                                &noise,
-                            ) < 0.5
-                            {
-                                voxel_shapes::ALL
-                            } else {
-                                voxel_shapes::EMPTY
-                            }
+                let mut chunk = VoxelChunk::new(chunk_pos);
+            
+                // Set chunk data
+                let noise = Perlin::new();
+                let chunk_pos_scenespace = chunk.scenespace_pos();
+                chunk
+                    .voxels
+                    .par_iter_mut()
+                    .enumerate()
+                    .for_each(|(x, arr0)| {
+                        arr0.par_iter_mut().enumerate().for_each(|(y, arr1)| {
+                            arr1.par_iter_mut().enumerate().for_each(|(z, voxel)| {
+                                voxel.shape = if get_density(
+                                    IVec3::new(
+                                        chunk_pos_scenespace.x + x as i32,
+                                        chunk_pos_scenespace.y + y as i32,
+                                        chunk_pos_scenespace.z + z as i32,
+                                    ),
+                                    &noise,
+                                ) < 0.5
+                                {
+                                    voxel_shapes::ALL
+                                } else {
+                                    voxel_shapes::EMPTY
+                                }
+                            });
                         });
                     });
-                });
 
-            chunk.generate_mesh();
+                let mut scene_lock = scene.lock().unwrap();
+                scene_lock.register_chunk(chunk);
+                println!("Initialized chunk at {chunk_pos}");
+                scene_lock.chunk_generation_queue.push_back(chunk_pos.clone());
+                drop(scene_lock);
+            }
+        });
+    }
+
+    pub fn process_generation_queue(scene: Arc<Mutex<VoxelScene>>) {
+        rayon::spawn(move || {
+            loop {
+                let mut scene_lock = scene.lock().unwrap();
+                if scene_lock.chunk_generation_queue.len() == 0 {
+                    drop(scene_lock);
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                
+                let chunk_pos = scene_lock.chunk_generation_queue.pop_front().unwrap();
+                let mut chunk = scene_lock.chunks.remove(&chunk_pos).unwrap();
+                drop(scene_lock);
+                
+                chunk.generate_mesh();
+                println!("Generated chunk at {chunk_pos}");
+                let mut scene_lock = scene.lock().unwrap();
+                scene_lock.chunks.insert(chunk_pos, chunk);
+                scene_lock.chunk_submission_queue.push_back(chunk_pos);
+                drop(scene_lock);
+            }
         });
     }
 }
@@ -223,6 +265,8 @@ fn generate_faces(
         ]);
         vertices.reserve(4);
         
+        let color = [0.8, 0.5, 0.3];
+
         // v0
         vertices.push(Vertex {
             position: [

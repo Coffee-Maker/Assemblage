@@ -280,6 +280,7 @@ impl State {
 
         let pass = RenderPassData {
             render_pipeline,
+            
             vertex_buffer,
             index_buffer,
             vertex_count,
