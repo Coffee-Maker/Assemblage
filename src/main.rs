@@ -1,11 +1,16 @@
 #![feature(int_roundings)]
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 mod camera_controller;
 mod rendering;
 mod state;
 mod voxels;
 
-use std::{sync::{Arc, Mutex}, thread::{Thread, self}, time::Duration};
+use std::{sync::{Arc, Mutex}, thread::{Thread, self}, time::Duration, collections::HashMap};
 
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use state::*;
@@ -26,11 +31,12 @@ async fn main() -> Result<(), ()> {
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap(); // Create a window
-    let scene = Arc::new(Mutex::new(VoxelScene::new()));
+    let scene = Arc::new(VoxelScene::new());
     let state = Arc::new(Mutex::new(State::new(&window).await));
 
     let state_clone = Arc::clone(&state);
-    generate_world(scene, state_clone, UVec3::new(50, 1, 50)).await;
+    let scene_clone = Arc::clone(&scene);
+    generate_world(scene_clone, state_clone, UVec3::new(100, 5, 100)).await;
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -88,7 +94,7 @@ async fn main() -> Result<(), ()> {
     });
 }
 
-pub async fn generate_world(scene: Arc<Mutex<VoxelScene>>, state: Arc<Mutex<State>>, size: UVec3) {
+pub async fn generate_world(scene: Arc<VoxelScene>, state: Arc<Mutex<State>>, size: UVec3) {
     
     let mut state_lock = state.lock().unwrap();
     state_lock.render_passes.clear();
@@ -97,38 +103,43 @@ pub async fn generate_world(scene: Arc<Mutex<VoxelScene>>, state: Arc<Mutex<Stat
     for x in 0..size.x {
         for y in 0..size.y {
             for z in 0..size.z {
-                let mut scene_lock = scene.lock().unwrap();
-                scene_lock.initialize_chunk(&IVec3::new(x as i32, y as i32, z as i32));
+                scene.initialize_chunk(&IVec3::new(x as i32, y as i32, z as i32));
             }
         }
     }
 
     // Start initialization and generation threads
-    for i in 0..10 {
+    for _i in 0..1 {
         let scene_clone = Arc::clone(&scene);
         VoxelScene::process_initialization_queue(scene_clone);
     }
-    for i in 0..10 {
+    
+    for _i in 0..5 {
         let scene_clone = Arc::clone(&scene);
         VoxelScene::process_generation_queue(scene_clone);
     }
-
     
     // Regenerate mesh when a mesh is ready for submission
     let scene_clone = Arc::clone(&scene);
     let state_clone = Arc::clone(&state);
     rayon::spawn(move || {
+        let mut chunks = HashMap::new();
+
         loop {
-            let mut scene_lock = scene_clone.lock().unwrap();
-            if scene_lock.chunk_submission_queue.len() == 0 {
-                drop(scene_lock);
+            let mut submission_queue_lock = scene_clone.chunk_submission_queue.lock().unwrap();
+            if submission_queue_lock.len() == 0 {
+                drop(submission_queue_lock);
                 thread::sleep(Duration::from_millis(10));
                 continue;
             }
-            scene_lock.chunk_submission_queue.clear();
+            
+            let mut chunks_lock = scene_clone.chunks.lock().unwrap();
+            submission_queue_lock.iter().for_each(|c| {chunks.insert(*c, chunks_lock.remove(c).unwrap()); });
+            drop(chunks_lock);
+            submission_queue_lock.clear();
+            drop(submission_queue_lock);
 
-            let meshes = scene_lock
-                .chunks
+            let meshes = chunks
                 .par_iter_mut()
                 .map(|(position, chunk)| {
                     let mut mesh = chunk.mesh.clone();
@@ -144,7 +155,7 @@ pub async fn generate_world(scene: Arc<Mutex<VoxelScene>>, state: Arc<Mutex<Stat
                     mesh
                 })
                 .collect::<Vec<Mesh>>();
-        
+
             let mut combined_verts = Vec::new();
             let mut combined_indices = Vec::new();
             meshes
@@ -158,15 +169,22 @@ pub async fn generate_world(scene: Arc<Mutex<VoxelScene>>, state: Arc<Mutex<Stat
                     combined_indices.reserve(indics.len());
                     combined_indices.extend(indics.iter().map(|&x| x + offset));
                 });
-
+            
+            let vert_count = combined_verts.len();
             let mut state_lock = state_clone.lock().unwrap();
+            
             let pass_index = state_lock.render_passes.len() - 1;
             let mut pass = state_lock.render_passes.remove(pass_index);
-
+            
             pass.set_vertices(&state_lock.device, &mut combined_verts);
             pass.set_indices(&state_lock.device, &mut combined_indices);
-
+            
             state_lock.render_passes.push(pass);
+
+            if vert_count > 10000 {
+                state_lock.add_render_pass();
+                chunks.clear();
+            }
         }
     });
     

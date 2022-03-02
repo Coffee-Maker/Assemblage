@@ -69,4 +69,5 @@ impl VoxelShape {
 #[derive(Clone, Copy)]
 pub struct VoxelData {
     pub shape: VoxelShape,
+    pub density: f32,
 }
