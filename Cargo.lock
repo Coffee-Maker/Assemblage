@@ -637,6 +637,7 @@ dependencies = [
  "flume",
  "glam",
  "image",
+ "lazy_static",
  "log",
  "mimalloc",
  "noise",

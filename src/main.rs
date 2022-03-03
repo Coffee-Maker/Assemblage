@@ -5,6 +5,9 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+#[macro_use]
+extern crate lazy_static;
+
 mod camera_controller;
 mod rendering;
 mod state;
@@ -12,7 +15,7 @@ mod voxels;
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex}
+    sync::{Arc, Mutex},
 };
 
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
@@ -26,11 +29,10 @@ use winit::{
     window::WindowBuilder,
 };
 
-use crate::{rendering::mesh::Mesh, voxels::{voxel_scene::VoxelScene}};
+use crate::{rendering::mesh::Mesh, voxels::voxel_scene::VoxelScene};
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
-
     env_logger::init(); // Tells WGPU to inform us of errors, rather than failing silently
 
     let event_loop = EventLoop::new();
@@ -39,7 +41,7 @@ async fn main() -> Result<(), ()> {
     let state = Arc::new(Mutex::new(State::new(&window).await));
 
     let state_clone = Arc::clone(&state);
-    generate_world(&mut scene, state_clone, UVec3::new(50, 5, 50)).await;
+    generate_world(&mut scene, state_clone, UVec3::new(50, 5, 50));
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -97,7 +99,7 @@ async fn main() -> Result<(), ()> {
     });
 }
 
-pub async fn generate_world(scene: &mut VoxelScene, state: Arc<Mutex<State>>, size: UVec3) {
+pub fn generate_world(scene: &mut VoxelScene, state: Arc<Mutex<State>>, size: UVec3) {
     let mut state_lock = state.lock().unwrap();
     state_lock.render_passes.clear();
     state_lock.add_render_pass();
@@ -121,9 +123,10 @@ pub async fn generate_world(scene: &mut VoxelScene, state: Arc<Mutex<State>>, si
             let mut count = 0;
             loop {
                 let data = rx.try_recv();
-                match data
-                {
-                    Ok(data) => {saved_meshes.insert(data.0, data.1);},
+                match data {
+                    Ok(data) => {
+                        saved_meshes.insert(data.0, data.1);
+                    }
                     Err(_) => break,
                 }
                 if count > 300 {

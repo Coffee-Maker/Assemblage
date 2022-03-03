@@ -1,4 +1,4 @@
-use super::{vertex::Vertex};
+use super::vertex::Vertex;
 use wgpu::util::DeviceExt;
 
 pub struct RenderPassData {

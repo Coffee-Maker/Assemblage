@@ -1,4 +1,4 @@
-use std::collections::{HashMap};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -9,7 +9,11 @@ use noise::{NoiseFn, Perlin};
 
 use crate::rendering::mesh::Mesh;
 use crate::rendering::vertex::Vertex;
-use crate::voxels::voxel_data::{voxel_shapes, VoxelData, VoxelShape};
+use crate::voxels::voxel_data::VoxelData;
+use crate::voxels::voxel_shapes::voxel_shapes;
+
+use super::voxel_mesh::get_voxel_mesh;
+use super::voxel_shapes::{voxel_directions, VoxelDirection, VoxelShape};
 
 pub const CHUNK_SIZE: u32 = 16;
 
@@ -28,14 +32,15 @@ impl VoxelScene {
             initialization_channel: flume::unbounded(),
             registration_channel: flume::unbounded(),
             generation_channel: flume::unbounded(),
-
         }
     }
 
     pub fn voxel_at(&self, position: &IVec3) -> Option<VoxelData> {
         let chunk_pos = Self::chunk_at(position);
         let chunk_lock = self.chunks.lock().unwrap();
-        chunk_lock.get(&chunk_pos).map(|chunk| chunk.voxel_scenespace_at(position).unwrap().to_owned())
+        chunk_lock
+            .get(&chunk_pos)
+            .map(|chunk| chunk.voxel_scenespace_at(position).unwrap().to_owned())
     }
 
     pub fn chunk_at(position: &IVec3) -> IVec3 {
@@ -47,18 +52,29 @@ impl VoxelScene {
     }
 
     pub fn setup_chunk_processors(&mut self, mesh_sender: Sender<(IVec3, Mesh)>) {
-        for _i in 0..5 {
-            VoxelScene::initialization_processor(self.initialization_channel.1.clone(), self.registration_channel.0.clone());
+        for _i in 0..2 {
+            VoxelScene::initialization_processor(
+                self.initialization_channel.1.clone(),
+                self.registration_channel.0.clone(),
+            );
         }
 
-        for _i in 0..5 {
+        for _i in 0..2 {
             let chunks_clone = Arc::clone(&self.chunks);
-            VoxelScene::generation_processor(chunks_clone, self.generation_channel.1.clone(), mesh_sender.clone());
+            VoxelScene::generation_processor(
+                chunks_clone,
+                self.generation_channel.1.clone(),
+                mesh_sender.clone(),
+            );
         }
 
         for _ in 0..1 {
             let chunks_clone = Arc::clone(&self.chunks);
-            VoxelScene::registration_processor(self.registration_channel.1.clone(), chunks_clone, self.generation_channel.0.clone());
+            VoxelScene::registration_processor(
+                self.registration_channel.1.clone(),
+                chunks_clone,
+                self.generation_channel.0.clone(),
+            );
         }
     }
 
@@ -66,7 +82,10 @@ impl VoxelScene {
         self.initialization_channel.0.send(position).unwrap();
     }
 
-    pub fn initialization_processor(pos_receiver: Receiver<IVec3>, chunk_sender: Sender<VoxelChunk>) {
+    pub fn initialization_processor(
+        pos_receiver: Receiver<IVec3>,
+        chunk_sender: Sender<VoxelChunk>,
+    ) {
         rayon::spawn(move || {
             println!("Started initialization processor");
             loop {
@@ -77,43 +96,51 @@ impl VoxelScene {
                 // Set chunk data
                 let noise = Perlin::new();
                 let chunk_pos_scenespace = chunk.scenespace_pos();
-                chunk.voxels.iter_mut().enumerate().for_each(|(x, arr0)| {
-                    arr0.iter_mut().enumerate().for_each(|(y, arr1)| {
-                        arr1.iter_mut().enumerate().for_each(|(z, voxel)| {
-                            let density = get_density(
-                                IVec3::new(
-                                    chunk_pos_scenespace.x + x as i32,
-                                    chunk_pos_scenespace.y + y as i32,
-                                    chunk_pos_scenespace.z + z as i32,
-                                ),
-                                &noise,
-                            ) as f32;
-                            if density > 0.0 {
-                                chunk.is_empty = false;
-                                voxel.occlussion_shape = voxel_shapes::ALL;
-                            }
-                        });
+                chunk
+                    .voxels
+                    .iter_mut()
+                    .enumerate()
+                    .for_each(|(index, voxel)| {
+                        let voxel_pos = index_to_pos(index as u32);
+                        let density = get_density(
+                            IVec3::new(
+                                chunk_pos_scenespace.x + voxel_pos.x as i32,
+                                chunk_pos_scenespace.y + voxel_pos.y as i32,
+                                chunk_pos_scenespace.z + voxel_pos.z as i32,
+                            ),
+                            &noise,
+                        ) as f32;
+                        if density > 0.0 {
+                            chunk.is_empty = false;
+                            voxel.shape = voxel_shapes::CUBE;
+                            voxel.voxel_id = 1;
+                        }
                     });
-                });
 
                 chunk_sender.send(chunk).unwrap();
             }
         });
     }
 
-    pub fn registration_processor(chunk_receiver: Receiver<VoxelChunk>, chunks: Arc<Mutex<HashMap<IVec3, VoxelChunk>>>, pos_sender: Sender<IVec3>) {
-        rayon::spawn(move|| {
-            loop {
-                let chunk = chunk_receiver.recv().unwrap();
-                let pos = chunk.position;
-                let mut chunks_lock = chunks.lock().unwrap();
-                chunks_lock.insert(pos, chunk);
-                pos_sender.send(pos).unwrap();
-            }
+    pub fn registration_processor(
+        chunk_receiver: Receiver<VoxelChunk>,
+        chunks: Arc<Mutex<HashMap<IVec3, VoxelChunk>>>,
+        pos_sender: Sender<IVec3>,
+    ) {
+        rayon::spawn(move || loop {
+            let chunk = chunk_receiver.recv().unwrap();
+            let pos = chunk.position;
+            let mut chunks_lock = chunks.lock().unwrap();
+            chunks_lock.insert(pos, chunk);
+            pos_sender.send(pos).unwrap();
         });
     }
 
-    pub fn generation_processor(chunks: Arc<Mutex<HashMap<IVec3, VoxelChunk>>>, pos_receiver: Receiver<IVec3>, mesh_sender: Sender<(IVec3, Mesh)>) {
+    pub fn generation_processor(
+        chunks: Arc<Mutex<HashMap<IVec3, VoxelChunk>>>,
+        pos_receiver: Receiver<IVec3>,
+        mesh_sender: Sender<(IVec3, Mesh)>,
+    ) {
         rayon::spawn(move || {
             thread::sleep(Duration::from_secs(2)); // Dumb way to wait for neighbours to have data
             println!("Started generation processor");
@@ -156,7 +183,7 @@ pub fn perlin_scaled(position: IVec3, noise: &Perlin, amplitude: f32, wavelength
 pub struct VoxelChunk {
     pub position: IVec3,
     pub is_empty: bool,
-    voxels: [[[VoxelData; CHUNK_SIZE as usize]; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
+    voxels: Vec<VoxelData>,
 }
 
 impl VoxelChunk {
@@ -164,9 +191,14 @@ impl VoxelChunk {
         Self {
             position,
             is_empty: true,
-            voxels: [[[VoxelData {
-                occlussion_shape: voxel_shapes::EMPTY,
-            }; CHUNK_SIZE as usize]; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
+            voxels: vec![
+                VoxelData {
+                    shape: voxel_shapes::CUBE,
+                    state: 0,
+                    voxel_id: 0,
+                };
+                (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize
+            ],
         }
     }
 
@@ -199,15 +231,17 @@ impl VoxelChunk {
     }
 
     pub fn voxel_at(&self, position: &UVec3) -> &VoxelData {
-        &self.voxels[position.x as usize][position.y as usize][position.z as usize]
+        &self.voxels.get(pos_to_index(&position) as usize).unwrap()
     }
 
     pub fn voxel_at_mut(&mut self, position: &UVec3) -> &mut VoxelData {
-        &mut self.voxels[position.x as usize][position.y as usize][position.z as usize]
+        self.voxels
+            .get_mut(pos_to_index(&position) as usize)
+            .unwrap()
     }
 
     pub fn set_voxel_shape(&mut self, position: &UVec3, shape: VoxelShape) {
-        self.voxel_at_mut(position).occlussion_shape = shape
+        self.voxel_at_mut(position).shape = shape
     }
 
     pub fn generate_mesh(&self, scene_chunks: Arc<Mutex<HashMap<IVec3, VoxelChunk>>>) -> Mesh {
@@ -218,9 +252,18 @@ impl VoxelChunk {
             for y in 0..CHUNK_SIZE {
                 for z in 0..CHUNK_SIZE {
                     let pos = UVec3::new(x, y, z);
-                    if self.voxel_at(&pos).occlussion_shape != voxel_shapes::EMPTY {
+                    let voxel = self.voxel_at(&pos);
+                    if voxel.voxel_id != 0 {
+                        // Voxel is not air
                         let scene_chunks_clone = Arc::clone(&scene_chunks);
-                        generate_faces(scene_chunks_clone, self, &pos, &mut vertices, &mut indices);
+                        generate_faces(
+                            voxel,
+                            scene_chunks_clone,
+                            self,
+                            &pos,
+                            &mut vertices,
+                            &mut indices,
+                        );
                     }
                 }
             }
@@ -239,8 +282,20 @@ impl VoxelChunk {
     }
 }
 
+fn index_to_pos(index: u32) -> UVec3 {
+    let x = index / (CHUNK_SIZE * CHUNK_SIZE);
+    let y = index % (CHUNK_SIZE * CHUNK_SIZE) / CHUNK_SIZE;
+    let z = index % CHUNK_SIZE;
+    UVec3::new(x, y, z)
+}
+
+pub fn pos_to_index(pos: &UVec3) -> u32 {
+    (pos.x * CHUNK_SIZE * CHUNK_SIZE) + (pos.y * CHUNK_SIZE) + pos.z
+}
+
 #[inline(always)]
 fn generate_faces(
+    voxel: &VoxelData,
     scene_chunks: Arc<Mutex<HashMap<IVec3, VoxelChunk>>>,
     chunk: &VoxelChunk,
     position: &UVec3,
@@ -251,156 +306,73 @@ fn generate_faces(
     let f_position = position.as_vec3();
     let global_position = position + chunk.scenespace_pos();
 
-    let face_check = |offset: IVec3, space_requirement: VoxelShape| {
-        let sample_position = global_position + offset;
-        chunk
-            .voxel_scenespace_at(&sample_position)
-            .map_or_else(|| {
-                let scene_chunks_lock = scene_chunks.lock().unwrap();
-                scene_chunks_lock.get(&VoxelScene::chunk_at(&sample_position)).map_or(false, |chunk| {
-                    !chunk.voxel_scenespace_at(&sample_position).unwrap().occlussion_shape.contains(space_requirement)
-                })
-            }, |voxel| !voxel.occlussion_shape.contains(space_requirement))
+    let face_check = |direction: VoxelDirection| -> bool {
+        let sample_position = global_position + direction.as_vec();
+        let scene_chunks_lock = scene_chunks.lock().unwrap();
+        let neighbour = chunk.voxel_scenespace_at(&sample_position).map_or_else(
+            || {
+                scene_chunks_lock
+                    .get(&VoxelScene::chunk_at(&sample_position))
+                    .map_or(None, |chunk| chunk.voxel_scenespace_at(&sample_position))
+            },
+            |voxel| Some(voxel),
+        );
+        neighbour.map_or(true, |neighbour| {
+            neighbour.voxel_id == 0
+                || !neighbour
+                    .shape
+                    .face_contains(direction.flip(), (voxel.shape, direction))
+        })
     };
 
-    let mut build_quad = |quad_verts: &mut [[f32; 3]; 4], normal: [f32; 3]| {
-        let offset = vertices.len() as u32;
-        indices.append(&mut vec![
-            offset,
-            offset + 2,
-            offset + 1,
-            offset + 1,
-            offset + 2,
-            offset + 3,
-        ]);
-        vertices.reserve(4);
+    let mut append_mesh = |mesh: &Mesh| {
+        let index_offset = vertices.len();
+        indices.reserve(mesh.indices.len());
+        mesh.indices
+            .iter()
+            .for_each(|i| indices.push(i + index_offset as u32));
 
-        let color = [0.8, 0.5, 0.3];
-
-        // v0
-        vertices.push(Vertex {
-            position: [
-                quad_verts[0][0] + f_position.x,
-                quad_verts[0][1] + f_position.y,
-                quad_verts[0][2] + f_position.z,
-            ],
-            color: color,
-            normal,
-            uv: [0.0, 0.0],
-        });
-
-        // v1
-        vertices.push(Vertex {
-            position: [
-                quad_verts[1][0] + f_position.x,
-                quad_verts[1][1] + f_position.y,
-                quad_verts[1][2] + f_position.z,
-            ],
-            color: color,
-            normal,
-            uv: [1.0, 0.0],
-        });
-
-        // v2
-        vertices.push(Vertex {
-            position: [
-                quad_verts[2][0] + f_position.x,
-                quad_verts[2][1] + f_position.y,
-                quad_verts[2][2] + f_position.z,
-            ],
-            color: color,
-            normal,
-            uv: [0.0, 1.0],
-        });
-
-        // v3
-        vertices.push(Vertex {
-            position: [
-                quad_verts[3][0] + f_position.x,
-                quad_verts[3][1] + f_position.y,
-                quad_verts[3][2] + f_position.z,
-            ],
-            color: color,
-            normal,
-            uv: [1.0, 1.0],
+        vertices.reserve(mesh.vertices.len());
+        mesh.vertices.iter().for_each(|v| {
+            let mut vert = v.clone();
+            vert.position[0] += f_position.x;
+            vert.position[1] += f_position.y;
+            vert.position[2] += f_position.z;
+            vertices.push(vert);
         });
     };
+
+    let shape_mesh = get_voxel_mesh(voxel.shape);
+
+    append_mesh(&shape_mesh.always);
 
     // North
-    if face_check(IVec3::Z, voxel_shapes::SOUTH) {
-        build_quad(
-            &mut [
-                [1.0, 0.0, 1.0],
-                [0.0, 0.0, 1.0],
-                [1.0, 1.0, 1.0],
-                [0.0, 1.0, 1.0],
-            ],
-            [0.0, 0.0, 1.0],
-        );
+    if face_check(voxel_directions::NORTH) {
+        append_mesh(&shape_mesh.north);
     }
 
     // South
-    if face_check(-IVec3::Z, voxel_shapes::NORTH) {
-        build_quad(
-            &mut [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [1.0, 1.0, 0.0],
-            ],
-            [0.0, 0.0, -1.0],
-        );
+    if face_check(voxel_directions::SOUTH) {
+        append_mesh(&shape_mesh.south);
     }
 
     // East
-    if face_check(IVec3::X, voxel_shapes::WEST) {
-        build_quad(
-            &mut [
-                [1.0, 0.0, 0.0],
-                [1.0, 0.0, 1.0],
-                [1.0, 1.0, 0.0],
-                [1.0, 1.0, 1.0],
-            ],
-            [1.0, 0.0, 0.0],
-        );
+    if face_check(voxel_directions::EAST) {
+        append_mesh(&shape_mesh.east);
     }
 
     // West
-    if face_check(-IVec3::X, voxel_shapes::EAST) {
-        build_quad(
-            &mut [
-                [0.0, 0.0, 1.0],
-                [0.0, 0.0, 0.0],
-                [0.0, 1.0, 1.0],
-                [0.0, 1.0, 0.0],
-            ],
-            [-1.0, 0.0, 0.0],
-        );
+    if face_check(voxel_directions::WEST) {
+        append_mesh(&shape_mesh.west);
     }
 
-    // Top
-    if face_check(IVec3::Y, voxel_shapes::BOTTOM) {
-        build_quad(
-            &mut [
-                [0.0, 1.0, 0.0],
-                [1.0, 1.0, 0.0],
-                [0.0, 1.0, 1.0],
-                [1.0, 1.0, 1.0],
-            ],
-            [0.0, 1.0, 0.0],
-        );
+    // Up
+    if face_check(voxel_directions::UP) {
+        append_mesh(&shape_mesh.top);
     }
 
-    // Bottom
-    if face_check(-IVec3::Y, voxel_shapes::TOP) {
-        build_quad(
-            &mut [
-                [0.0, 0.0, 1.0],
-                [1.0, 0.0, 1.0],
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-            ],
-            [0.0, -1.0, 0.0],
-        );
+    // Down
+    if face_check(voxel_directions::DOWN) {
+        append_mesh(&shape_mesh.bottom);
     }
 }
