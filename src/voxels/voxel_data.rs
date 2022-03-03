@@ -1,4 +1,5 @@
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash, Default)]
+#[repr(packed(1))]
 pub struct VoxelShape {
     data: u8,
 }
@@ -67,7 +68,7 @@ impl VoxelShape {
 }
 
 #[derive(Clone, Copy)]
+#[repr(packed(1))]
 pub struct VoxelData {
-    pub shape: VoxelShape,
-    pub density: f32,
+    pub occlussion_shape: VoxelShape,
 }

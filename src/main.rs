@@ -10,7 +10,10 @@ mod rendering;
 mod state;
 mod voxels;
 
-use std::{sync::{Arc, Mutex}, thread::{Thread, self}, time::Duration, collections::HashMap};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex}
+};
 
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use state::*;
@@ -23,20 +26,20 @@ use winit::{
     window::WindowBuilder,
 };
 
-use crate::{rendering::mesh::Mesh, voxels::voxel_scene::VoxelScene};
+use crate::{rendering::mesh::Mesh, voxels::{voxel_scene::VoxelScene}};
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
+
     env_logger::init(); // Tells WGPU to inform us of errors, rather than failing silently
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap(); // Create a window
-    let scene = Arc::new(VoxelScene::new());
+    let mut scene = VoxelScene::new();
     let state = Arc::new(Mutex::new(State::new(&window).await));
 
     let state_clone = Arc::clone(&state);
-    let scene_clone = Arc::clone(&scene);
-    generate_world(scene_clone, state_clone, UVec3::new(100, 5, 100)).await;
+    generate_world(&mut scene, state_clone, UVec3::new(50, 5, 50)).await;
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -77,7 +80,7 @@ async fn main() -> Result<(), ()> {
                     Err(wgpu::SurfaceError::Lost) => {
                         let size = state_lock.size;
                         state_lock.resize(size)
-                    } ,
+                    }
                     // The system is out of memory, we should probably quit
                     Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
                     // All other errors (Outdated, Timeout) should be resolved by the next frame
@@ -94,8 +97,7 @@ async fn main() -> Result<(), ()> {
     });
 }
 
-pub async fn generate_world(scene: Arc<VoxelScene>, state: Arc<Mutex<State>>, size: UVec3) {
-    
+pub async fn generate_world(scene: &mut VoxelScene, state: Arc<Mutex<State>>, size: UVec3) {
     let mut state_lock = state.lock().unwrap();
     state_lock.render_passes.clear();
     state_lock.add_render_pass();
@@ -103,47 +105,38 @@ pub async fn generate_world(scene: Arc<VoxelScene>, state: Arc<Mutex<State>>, si
     for x in 0..size.x {
         for y in 0..size.y {
             for z in 0..size.z {
-                scene.initialize_chunk(&IVec3::new(x as i32, y as i32, z as i32));
+                scene.initialize_chunk(IVec3::new(x as i32, y as i32, z as i32));
             }
         }
     }
 
-    // Start initialization and generation threads
-    for _i in 0..1 {
-        let scene_clone = Arc::clone(&scene);
-        VoxelScene::process_initialization_queue(scene_clone);
-    }
-    
-    for _i in 0..5 {
-        let scene_clone = Arc::clone(&scene);
-        VoxelScene::process_generation_queue(scene_clone);
-    }
-    
+    let (tx, rx) = flume::unbounded();
+    scene.setup_chunk_processors(tx);
+
     // Regenerate mesh when a mesh is ready for submission
-    let scene_clone = Arc::clone(&scene);
     let state_clone = Arc::clone(&state);
     rayon::spawn(move || {
-        let mut chunks = HashMap::new();
-
+        let mut saved_meshes = HashMap::new();
         loop {
-            let mut submission_queue_lock = scene_clone.chunk_submission_queue.lock().unwrap();
-            if submission_queue_lock.len() == 0 {
-                drop(submission_queue_lock);
-                thread::sleep(Duration::from_millis(10));
-                continue;
+            let mut count = 0;
+            loop {
+                let data = rx.try_recv();
+                match data
+                {
+                    Ok(data) => {saved_meshes.insert(data.0, data.1);},
+                    Err(_) => break,
+                }
+                if count > 300 {
+                    break;
+                }
+                count += 1;
             }
-            
-            let mut chunks_lock = scene_clone.chunks.lock().unwrap();
-            submission_queue_lock.iter().for_each(|c| {chunks.insert(*c, chunks_lock.remove(c).unwrap()); });
-            drop(chunks_lock);
-            submission_queue_lock.clear();
-            drop(submission_queue_lock);
 
-            let meshes = chunks
+            let meshes = saved_meshes
                 .par_iter_mut()
                 .map(|(position, chunk)| {
-                    let mut mesh = chunk.mesh.clone();
-        
+                    let mut mesh = chunk.clone();
+
                     mesh.vertices.iter_mut().for_each(|vert| {
                         vert.position = [
                             vert.position[0] + (position.x as f32 * CHUNK_SIZE as f32),
@@ -151,7 +144,7 @@ pub async fn generate_world(scene: Arc<VoxelScene>, state: Arc<Mutex<State>>, si
                             vert.position[2] + (position.z as f32 * CHUNK_SIZE as f32),
                         ]
                     });
-        
+
                     mesh
                 })
                 .collect::<Vec<Mesh>>();
@@ -163,29 +156,28 @@ pub async fn generate_world(scene: Arc<VoxelScene>, state: Arc<Mutex<State>>, si
                 .map(|mesh| (mesh.vertices, mesh.indices))
                 .for_each(|(mut verts, indics)| {
                     let offset = combined_verts.len() as u32;
-        
+
                     combined_verts.append(&mut verts);
-        
+
                     combined_indices.reserve(indics.len());
                     combined_indices.extend(indics.iter().map(|&x| x + offset));
                 });
-            
+
             let vert_count = combined_verts.len();
             let mut state_lock = state_clone.lock().unwrap();
-            
+
             let pass_index = state_lock.render_passes.len() - 1;
             let mut pass = state_lock.render_passes.remove(pass_index);
-            
+
             pass.set_vertices(&state_lock.device, &mut combined_verts);
             pass.set_indices(&state_lock.device, &mut combined_indices);
-            
+
             state_lock.render_passes.push(pass);
 
-            if vert_count > 10000 {
+            if vert_count > 100000 {
                 state_lock.add_render_pass();
-                chunks.clear();
+                saved_meshes.clear();
             }
         }
     });
-    
 }

@@ -124,7 +124,7 @@ impl State {
         });
 
         // Camera controller
-        let camera_controller = CameraController::new(0.2);
+        let camera_controller = CameraController::new(1.0);
 
         // Render passes
         let render_passes = Vec::new();
@@ -280,7 +280,7 @@ impl State {
 
         let pass = RenderPassData {
             render_pipeline,
-            
+
             vertex_buffer,
             index_buffer,
             vertex_count,
