@@ -1,0 +1,38 @@
+                    |FORMAT|                            |PARAMETER NAMES|                   |NOTES|
+Objects [
+    Name            <string>
+    Position        <float, float, float>               <-- (x, y, z)
+    Rotation        <float, float, float, float>        <-- (x, y, z, w)
+    Scale           <float, float, float>               <-- (x, y, z)
+
+    Groups [
+        Name        <string>
+        Motions     [<int>]                             <-- (motion index)
+    ]
+
+    Points [
+        Position    <float, float, float>               <-- (x, y, z)                   <| Relative to the object
+        Color       <float, float, float, float>        <-- (r, g, b, a)
+        UV          <float, float>                      <-- (u, v)
+        Normal      <float, float, float>               <-- (x, y, z)
+        Groups      [<int, float>]                      <-- (index, weight)
+    ]
+    
+    Triangles [
+        Indices     <int, int, int>                     <-- (index, index, index)       <| The vertices used to build this triangle
+        Submesh     <int>                                                               <| Used to prescribe the material slot for this triangle
+    ]
+]
+
+Motions [
+    Origin          <float, float, float>               <-- (x, y, z)                   <| The origin of which to rotate and scale about
+    Parent          <int>                               <-- (index)                     <| Used to build hierarchies of bones / motions that are relative to their parent
+
+    Keyframes [
+        Time        <float>                                                             <| The time at which the motion is exactly on this keyframe
+        Position    <float, float, float>               <-- (x, y, z)
+        Rotation    <float, float, float>               <-- (x, y, z, w)
+        Scale       <float, float, float>               <-- (x, y, z)
+        Velocity    <float, float, float>               <-- (x, y, z)                   <| The speed and direction of the motion as it passes through this point
+    ]
+]

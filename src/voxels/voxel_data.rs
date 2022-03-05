@@ -5,5 +5,5 @@ use super::voxel_shapes::VoxelShape;
 pub struct VoxelData {
     pub shape: VoxelShape,
     pub state: u8,
-    pub voxel_id: u16,
+    pub id: u16,
 }

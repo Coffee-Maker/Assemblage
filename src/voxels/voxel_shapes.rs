@@ -12,7 +12,7 @@ const CUBE: [u8; 6] = [
 const STAIR: [u8; 6] = [
     0b_1111_1111, // North
     0b_1100_0011, // South
-    0b_1100_1111, // East
+    0b_1111_0011, // East
     0b_1111_0011, // West
     0b_0011_1100, // Top
     0b_1111_1111, // Bottom
@@ -23,7 +23,7 @@ const CORNER_STAIR: [u8; 6] = [
     0b_1100_1111, // South
     0b_1111_1111, // East
     0b_1111_0011, // West
-    0b_0011_1111, // Top
+    0b_1111_1100, // Top
     0b_1111_1111, // Bottom
 ];
 
@@ -41,7 +41,7 @@ const INNER_PRISM_JUNCTION: [u8; 6] = [
     0b_1000_0111, // South
     0b_1111_1111, // East
     0b_1110_0001, // West
-    0b_0001_1110, // Top
+    0b_0111_1000, // Top
     0b_1111_1111, // Bottom
 ];
 
@@ -55,9 +55,9 @@ const INNER_CORNER_PRISM: [u8; 6] = [
 ];
 
 const OUTER_CORNER_PRISM: [u8; 6] = [
-    0b_1110_0001, // North
+    0b_1000_0111, // North
     0b_0000_0000, // South
-    0b_1000_0111, // East
+    0b_1110_0001, // East
     0b_0000_0000, // West
     0b_0000_0000, // Top
     0b_1111_1111, // Bottom
@@ -66,7 +66,7 @@ const OUTER_CORNER_PRISM: [u8; 6] = [
 const PRISM: [u8; 6] = [
     0b_1111_1111, // North
     0b_0000_0000, // South
-    0b_1000_0111, // East
+    0b_1110_0001, // East
     0b_1110_0001, // West
     0b_0000_0000, // Top
     0b_1111_1111, // Bottom
@@ -93,6 +93,7 @@ fn get_shape_permutations() -> [u8; 1536] {
     for i in 0_u8..255 {
         let mut shape = SHAPES[(i << 5 >> 5) as usize]; // 32 rotations per shape
 
+        // Iterate through all possible permutations of the orientation, assigning it to a NOT RANDOM spot in the orientation array
         let rotation = i >> 3;
         if rotation & 0b_0000_0001 != 0 {
             shape = flip_north_south(shape);
@@ -236,12 +237,12 @@ pub mod voxel_shapes {
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash, Default)]
 #[repr(packed(1))]
 pub struct VoxelShape {
-    data: u8,
+    pub data: u8,
 }
 
 impl VoxelShape {
     pub fn get_face_shape(shape: VoxelShape, direction: VoxelDirection) -> u8 {
-        SHAPE_ORIENTATIONS[(shape.data + direction.data) as usize]
+        SHAPE_ORIENTATIONS[((shape.data * 6) + direction.data) as usize]
     }
 
     pub fn face_contains(&self, face: VoxelDirection, other: (VoxelShape, VoxelDirection)) -> bool {
@@ -252,6 +253,14 @@ impl VoxelShape {
     pub fn orient(&mut self, orientation: VoxelOrientation) {
         self.data = (self.data & 0b_0000_0111) | orientation.data;
     }
+
+    pub fn extract_shape(&self) -> u8 { self.data << 5 >> 5 }
+
+    pub fn extract_flip_x(&self) -> bool { self.data & 0b_0000_1000 == 0b_0000_1000 }
+    pub fn extract_flip_y(&self) -> bool { self.data & 0b_0001_0000 == 0b_0001_0000 }
+    pub fn extract_flip_z(&self) -> bool { self.data & 0b_0010_0000 == 0b_0010_0000 }
+    pub fn extract_rotate_x(&self) -> bool { self.data & 0b_0100_0000 == 0b_0100_0000 }
+    pub fn extract_rotate_z(&self) -> bool { self.data & 0b_1000_0000 == 0b_1000_0000 }
 }
 
 #[allow(dead_code)]

@@ -52,14 +52,14 @@ impl VoxelScene {
     }
 
     pub fn setup_chunk_processors(&mut self, mesh_sender: Sender<(IVec3, Mesh)>) {
-        for _i in 0..2 {
+        for _i in 0..4 {
             VoxelScene::initialization_processor(
                 self.initialization_channel.1.clone(),
                 self.registration_channel.0.clone(),
             );
         }
 
-        for _i in 0..2 {
+        for _i in 0..4 {
             let chunks_clone = Arc::clone(&self.chunks);
             VoxelScene::generation_processor(
                 chunks_clone,
@@ -88,6 +88,7 @@ impl VoxelScene {
     ) {
         rayon::spawn(move || {
             println!("Started initialization processor");
+
             loop {
                 let chunk_pos = pos_receiver.recv().unwrap();
 
@@ -112,8 +113,12 @@ impl VoxelScene {
                         ) as f32;
                         if density > 0.0 {
                             chunk.is_empty = false;
-                            voxel.shape = voxel_shapes::CUBE;
-                            voxel.voxel_id = 1;
+                            voxel.shape = if density < 0.5 {
+                                voxel_shapes::CORNER_STAIR
+                            } else {
+                                voxel_shapes::CUBE
+                            };
+                            voxel.id = 1;
                         }
                     });
 
@@ -158,7 +163,7 @@ impl VoxelScene {
 }
 
 pub fn get_density(position: IVec3, noise: &Perlin) -> f64 {
-    let height_offset: f32 = 20.0;
+    let height_offset: f32 = 0.0;
     let height_blend: f32 = 1.0;
 
     let mut final_density = 0.0;
@@ -195,7 +200,7 @@ impl VoxelChunk {
                 VoxelData {
                     shape: voxel_shapes::CUBE,
                     state: 0,
-                    voxel_id: 0,
+                    id: 0,
                 };
                 (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize
             ],
@@ -253,7 +258,7 @@ impl VoxelChunk {
                 for z in 0..CHUNK_SIZE {
                     let pos = UVec3::new(x, y, z);
                     let voxel = self.voxel_at(&pos);
-                    if voxel.voxel_id != 0 {
+                    if voxel.id != 0 {
                         // Voxel is not air
                         let scene_chunks_clone = Arc::clone(&scene_chunks);
                         generate_faces(
@@ -318,7 +323,9 @@ fn generate_faces(
             |voxel| Some(voxel),
         );
         neighbour.map_or(true, |neighbour| {
-            neighbour.voxel_id == 0
+            //println!("Self {:#08b}", VoxelShape::get_face_shape(voxel.shape, direction));
+            //println!("Neighbour {:#08b}", VoxelShape::get_face_shape(neighbour.shape, direction.flip()));
+            neighbour.id == 0
                 || !neighbour
                     .shape
                     .face_contains(direction.flip(), (voxel.shape, direction))
@@ -335,9 +342,37 @@ fn generate_faces(
         vertices.reserve(mesh.vertices.len());
         mesh.vertices.iter().for_each(|v| {
             let mut vert = v.clone();
-            vert.position[0] += f_position.x;
-            vert.position[1] += f_position.y;
-            vert.position[2] += f_position.z;
+            let x = v.position[0]
+                * if voxel.shape.extract_flip_x() {
+                    -1.0
+                } else {
+                    1.0
+                };
+            let y = v.position[1]
+                * if voxel.shape.extract_flip_y() {
+                    -1.0
+                } else {
+                    1.0
+                };
+            let z = v.position[2]
+                * if voxel.shape.extract_flip_z() {
+                    -1.0
+                } else {
+                    1.0
+                };
+            let (y, z) = if voxel.shape.extract_rotate_x() {
+                (-z, y)
+            } else {
+                (y, z)
+            };
+            let (x, y) = if voxel.shape.extract_rotate_z() {
+                (y, -x)
+            } else {
+                (x, y)
+            };
+            vert.position[0] = x + f_position.x;
+            vert.position[1] = y + f_position.y;
+            vert.position[2] = z + f_position.z;
             vertices.push(vert);
         });
     };

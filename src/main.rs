@@ -41,7 +41,7 @@ async fn main() -> Result<(), ()> {
     let state = Arc::new(Mutex::new(State::new(&window).await));
 
     let state_clone = Arc::clone(&state);
-    generate_world(&mut scene, state_clone, UVec3::new(50, 5, 50));
+    generate_world(&mut scene, state_clone, UVec3::new(25, 5, 25));
 
     event_loop.run(move |event, _, control_flow| {
         match event {

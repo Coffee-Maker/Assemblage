@@ -1,96 +1,75 @@
 use crate::rendering::mesh::Mesh;
 
+use self::voxel_meshes::SHAPE_MESHES;
+
 use super::voxel_shapes::VoxelShape;
 
 #[rustfmt::skip]
 mod voxel_meshes {
-    use crate::{rendering::{mesh::Mesh, vertex::Vertex}, voxels::voxel_mesh::VoxelMesh};
+    use crate::{rendering::{mesh::Mesh}, voxels::voxel_mesh::VoxelMesh};
 
     lazy_static! {
-        pub static ref CUBE_MESH: VoxelMesh = VoxelMesh {
+        pub static ref CUBE: VoxelMesh = VoxelMesh {
             always: Mesh::new(),
-            north:  add_quad(Mesh::new(), [[1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 0.0, 1.0], [0.0, 1.0, 1.0]], [0.0, 0.0, 1.0]),
-            south:  add_quad(Mesh::new(), [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]], [0.0, 0.0, -1.0]),
-            east:   add_quad(Mesh::new(), [[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0]], [1.0, 0.0, 0.0]),
-            west:   add_quad(Mesh::new(), [[0.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]], [-1.0, 0.0, 0.0]),
-            top:    add_quad(Mesh::new(), [[0.0, 1.0, 0.0], [0.0, 1.0, 1.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0]], [0.0, 1.0, 0.0]),
-            bottom: add_quad(Mesh::new(), [[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.0, 1.0], [1.0, 0.0, 0.0]], [0.0, -1.0, 0.0]),
+            north:  Mesh::new().add_quad([[0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5]], [0.0, 0.0, 1.0]),
+            south:  Mesh::new().add_quad([[-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5]], [0.0, 0.0, -1.0]),
+            east:   Mesh::new().add_quad([[0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5]], [0.5, 0.0, 0.0]),
+            west:   Mesh::new().add_quad([[-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5]], [-1.0, -0.0, 0.0]),
+            top:    Mesh::new().add_quad([[-0.5, 0.5, -0.5], [-0.5, 0.5, 0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5]], [0.0, 1.0, 0.0]),
+            bottom: Mesh::new().add_quad([[-0.5, -0.5, 0.5], [-0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [0.5, -0.5, -0.5]], [0.0, -1.0, 0.0]),
         };
 
-        pub static ref SLAB: VoxelMesh = VoxelMesh {
-            always: Mesh::new(),
-            north:  add_quad(Mesh::new(), [[1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 0.0, 1.0], [0.0, 1.0, 1.0]], [0.0, 0.0, 1.0]),
-            south:  add_quad(Mesh::new(), [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]], [0.0, 0.0, -1.0]),
-            east:   add_quad(Mesh::new(), [[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0]], [1.0, 0.0, 0.0]),
-            west:   add_quad(Mesh::new(), [[0.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]], [-1.0, 0.0, 0.0]),
-            top:    add_quad(Mesh::new(), [[0.0, 1.0, 0.0], [0.0, 1.0, 1.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0]], [0.0, 1.0, 0.0]),
-            bottom: add_quad(Mesh::new(), [[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.0, 1.0], [1.0, 0.0, 0.0]], [0.0, -1.0, 0.0]),
+        pub static ref STAIR: VoxelMesh = VoxelMesh {
+            always: Mesh::new()
+                .add_quad([[-0.5, 0.0, -0.5], [-0.5, 0.0, 0.0], [0.5, 0.0, -0.5], [0.5, 0.0, 0.0]], [0.0, 1.0, 0.0])
+                .add_quad([[-0.5, 0.0, 0.0], [-0.5, 0.5, 0.0], [0.5, 0.0, 0.0], [0.5, 0.5, 0.0]], [0.0, 0.0, -1.0]),
+            north:  Mesh::new().add_quad([[0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5]], [0.0, 0.0, 1.0]),
+            south:  Mesh::new().add_quad([[-0.5, -0.5, -0.5], [-0.5, 0.0, -0.5], [0.5, -0.5, -0.5], [0.5, 0.0, -0.5]], [0.0, 0.0, -1.0]),
+            east:   Mesh::new()
+                .add_custom(
+                    vec![[0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [0.5, 0.0, 0.0], [0.5, 0.5, 0.0], [0.5, -0.5, -0.5], [0.5, 0.0, -0.5]], 
+                    vec![4, 1, 0, 2, 3, 1, 4, 5, 2], [1.0, 0.0, 0.0]),
+            west:   Mesh::new()
+                .add_custom(
+                    vec![[-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [-0.5, 0.0, 0.0], [-0.5, 0.5, 0.0], [-0.5, -0.5, -0.5], [-0.5, 0.0, -0.5]], 
+                    vec![0, 1, 4, 1, 3, 2, 2, 5, 4], [-1.0, 0.0, 0.0]),
+            top:    Mesh::new().add_quad([[-0.5, 0.5, 0.0], [-0.5, 0.5, 0.5], [0.5, 0.5, 0.0], [0.5, 0.5, 0.5]], [0.0, 1.0, 0.0]),
+            bottom: Mesh::new().add_quad([[-0.5, -0.5, 0.5], [-0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [0.5, -0.5, -0.5]], [0.0, -1.0, 0.0]),
         };
-    }
 
-    fn add_quad(mut mesh: Mesh, quad_verts: [[f32; 3]; 4], normal: [f32; 3]) -> Mesh {
-        let index_offset = mesh.vertices.len() as u32;
-        mesh.indices.append(&mut vec![
-            index_offset,
-            index_offset + 1,
-            index_offset + 2,
-            index_offset + 2,
-            index_offset + 1,
-            index_offset + 3,
-        ]);
-        mesh.vertices.reserve(4);
+        pub static ref CORNER_STAIR: VoxelMesh = VoxelMesh {
+            always: Mesh::new()
+                .add_quad([[-0.5, 0.0, -0.5], [-0.5, 0.0, 0.0], [0.0, 0.0, -0.5], [0.0, 0.0, 0.0]], [0.0, 1.0, 0.0])
+                .add_quad([[-0.5, 0.0, 0.0], [-0.5, 0.5, 0.0], [0.0, 0.0, 0.0], [0.0, 0.5, 0.0]], [0.0, 0.0, -1.0])
+                .add_quad([[0.0, 0.0, 0.0], [0.0, 0.5, 0.0], [0.0, 0.0, -0.5], [0.0, 0.5, -0.5]], [-1.0, 0.0, 0.0]),
+            north:  Mesh::new().add_quad([[0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5]], [0.0, 0.0, 1.0]),
+            south:  Mesh::new()
+                .add_custom(
+                    vec![[-0.5, -0.5, -0.5], [-0.5, 0.0, -0.5], [0.5, -0.5, -0.5], [0.0, 0.0, -0.5], [0.0, 0.5, -0.5], [0.5, 0.5, -0.5]], 
+                    vec![0, 1, 2, 2, 1, 3, 3, 4, 5, 3, 5, 2], [0.0, 0.0, -1.0]),
+            east:   Mesh::new().add_quad([[0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5]], [0.5, 0.0, 0.0]),
+            west:   Mesh::new()
+                .add_custom(
+                    vec![[-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [-0.5, 0.0, 0.0], [-0.5, 0.5, 0.0], [-0.5, -0.5, -0.5], [-0.5, 0.0, -0.5]],
+                    vec![0, 1, 2, 2, 1, 3, 0, 2, 4, 4, 2, 5], [-1.0, 0.0, 0.0]),
+            top:    Mesh::new()
+                .add_custom(
+                    vec![[-0.5, 0.5, 0.0], [-0.5, 0.5, 0.5], [0.0, 0.5, 0.0], [0.5, 0.5, 0.5], [0.0, 0.5, -0.5], [0.5, 0.5, -0.5]], 
+                    vec![1, 3, 5, 0, 1, 2, 4, 2, 5], [0.0, 1.0, 0.0]),
+            bottom: Mesh::new().add_quad([[-0.5, -0.5, 0.5], [-0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [0.5, -0.5, -0.5]], [0.0, -1.0, 0.0]),
+        };
 
-        let color = [0.8, 0.5, 0.3];
+        pub static ref PRISM: VoxelMesh = VoxelMesh {
+            always: Mesh::new().add_quad( [[-0.5, -0.5, -0.5], [-0.5, 0.5, 0.5], [0.5, -0.5, -0.5], [0.5, 0.5, 0.5]], [0.0, 0.7071, -0.7071]),
+            north:  Mesh::new().add_quad( [[0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5]], [0.0, 0.0, 1.0]),
+            south:   Mesh::new(),
+            east:   Mesh::new().add_tri([[0.5, -0.5, -0.5], [0.5, 0.5, 0.5], [0.5, -0.5, 0.5]], [1.0, 0.0, 0.0]),
+            west:   Mesh::new().add_tri([[-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [-0.5, -0.5, -0.5]], [-1.0, 0.0, 0.0]),
+            top:     Mesh::new(),
+            bottom: Mesh::new().add_quad([[-0.5, -0.5, 0.5], [-0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [0.5, -0.5, -0.5]], [0.0, -1.0, 0.0]),
+        };
 
-        // v0
-        mesh.vertices.push(Vertex {
-            position: [
-                quad_verts[0][0],
-                quad_verts[0][1],
-                quad_verts[0][2],
-            ],
-            color: color,
-            normal,
-            uv: [0.0, 0.0],
-        });
-
-        // v1
-        mesh.vertices.push(Vertex {
-            position: [
-                quad_verts[1][0],
-                quad_verts[1][1],
-                quad_verts[1][2],
-            ],
-            color: color,
-            normal,
-            uv: [1.0, 0.0],
-        });
-
-        // v2
-        mesh.vertices.push(Vertex {
-            position: [
-                quad_verts[2][0],
-                quad_verts[2][1],
-                quad_verts[2][2],
-            ],
-            color: color,
-            normal,
-            uv: [0.0, 1.0],
-        });
-
-        // v3
-        mesh.vertices.push(Vertex {
-            position: [
-                quad_verts[3][0],
-                quad_verts[3][1],
-                quad_verts[3][2],
-            ],
-            color: color,
-            normal,
-            uv: [1.0, 1.0],
-        });
-
-        mesh
+        pub static ref SHAPE_MESHES: [&'static VoxelMesh; 8] = [&*CUBE, &*STAIR, &*CORNER_STAIR, &*CUBE, &*CUBE, &*CUBE, &*CUBE, &*PRISM];
     }
 }
 
@@ -105,5 +84,5 @@ pub struct VoxelMesh {
 }
 
 pub fn get_voxel_mesh(shape: VoxelShape) -> &'static VoxelMesh {
-    &*voxel_meshes::CUBE_MESH
+    SHAPE_MESHES[shape.extract_shape() as usize]
 }

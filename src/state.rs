@@ -124,7 +124,7 @@ impl State {
         });
 
         // Camera controller
-        let camera_controller = CameraController::new(1.0);
+        let camera_controller = CameraController::new(0.5);
 
         // Render passes
         let render_passes = Vec::new();
@@ -303,6 +303,7 @@ impl State {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+            self.camera.aspect = self.config.width as f32 / self.config.height as f32;
 
             self.depth_texture =
                 texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
