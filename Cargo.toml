@@ -22,3 +22,5 @@ mimalloc = { version = "0.1.28", default-features = false }
 flume = "0.10.11"
 lazy_static = "1.4.0"
 gltf = "1.0"
+dashmap = "5.1"
+ahash = "0.7"

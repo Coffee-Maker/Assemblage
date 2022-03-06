@@ -1,30 +1,31 @@
+Version                 <-- LEB128  <| For compatibility! :D
 Config                  <-- 1 byte  <| Bits determine what data is stored: [Postions, Colors, UVs, Normals, Triangles, Groups, Motions, Keyframes]
-Objects length          <-- 1 byte
+Objects length          <-- LEB128
 =>Object list
-# Motions length          <-- 1 byte
+# Motions length        <-- 1 byte
 # =>Motion list
 
 ==Object==
-Name length             <-- 1 byte
+Name length             <-- LEB128
 Name                    <-- Name length bytes
 Position                <-- 12 bytes
 Rotation                <-- 16 bytes
 Scale                   <-- 12 bytes
-Groups length           <-- 1 byte
+Groups length           <-- LEB128
 =>Group list
-Points length           <-- 4 bytes
+Points length           <-- LEB128
 =>Point list
-Triangle length         <-- 4 bytes
+Triangle length         <-- LEB128
 =>Triangle list
 
 ==Group==
-Name length             <-- 1 byte
+Name length             <-- LEB128
 Name                    <-- Name length bytes
-# Motions length          <-- 1 byte
+# Motions length        <-- 1 byte
 # =>Motions list
 
 ==Group reference==
-Index                   <-- 1 byte
+Index                   <-- LEB128
 Weight                  <-- 4 byte
 
 ==Point==
@@ -32,12 +33,12 @@ Position                <-- 12 bytes
 Color                   <-- 16 bytes
 UV                      <-- 8 bytes
 Normal                  <-- 12 bytes
-Groups length           <-- 1 byte
+Groups length           <-- LEB128
 =>Group reference list
 
 ==Triangle==
-Indices                 <-- 12 bytes
-Submesh                 <-- 1 byte
+Indices                 <-- LEB128 * 3
+Submesh                 <-- LEB128
 
 # ==Motion==
 # Origin                  <-- 12 bytes

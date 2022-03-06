@@ -19,6 +19,16 @@ mod voxel_meshes {
             bottom: Mesh::new().add_quad([[-0.5, -0.5, 0.5], [-0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [0.5, -0.5, -0.5]], [0.0, -1.0, 0.0]),
         };
 
+        pub static ref SLAB: VoxelMesh = VoxelMesh {
+            always: Mesh::new().add_quad([[-0.5, 0.0, -0.5], [-0.5, 0.0, 0.5], [0.5, 0.0, -0.5], [0.5, 0.0, 0.5]], [0.0, 1.0, 0.0]),
+            north:  Mesh::new().add_quad([[0.5, -0.5, 0.5], [0.5, 0.0, 0.5], [-0.5, -0.5, 0.5], [-0.5, 0.0, 0.5]], [0.0, 0.0, 1.0]),
+            south:  Mesh::new().add_quad([[-0.5, -0.5, -0.5], [-0.5, 0.0, -0.5], [0.5, -0.5, -0.5], [0.5, 0.0, -0.5]], [0.0, 0.0, -1.0]),
+            east:   Mesh::new().add_quad([[0.5, -0.5, -0.5], [0.5, 0.0, -0.5], [0.5, -0.5, 0.5], [0.5, 0.0, 0.5]], [0.5, 0.0, 0.0]),
+            west:   Mesh::new().add_quad([[-0.5, -0.5, 0.5], [-0.5, 0.0, 0.5], [-0.5, -0.5, -0.5], [-0.5, 0.0, -0.5]], [-1.0, -0.0, 0.0]),
+            top:    Mesh::new(),
+            bottom: Mesh::new().add_quad([[-0.5, -0.5, 0.5], [-0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [0.5, -0.5, -0.5]], [0.0, -1.0, 0.0]),
+        };
+
         pub static ref STAIR: VoxelMesh = VoxelMesh {
             always: Mesh::new()
                 .add_quad([[-0.5, 0.0, -0.5], [-0.5, 0.0, 0.0], [0.5, 0.0, -0.5], [0.5, 0.0, 0.0]], [0.0, 1.0, 0.0])
@@ -69,7 +79,7 @@ mod voxel_meshes {
             bottom: Mesh::new().add_quad([[-0.5, -0.5, 0.5], [-0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [0.5, -0.5, -0.5]], [0.0, -1.0, 0.0]),
         };
 
-        pub static ref SHAPE_MESHES: [&'static VoxelMesh; 8] = [&*CUBE, &*STAIR, &*CORNER_STAIR, &*CUBE, &*CUBE, &*CUBE, &*CUBE, &*PRISM];
+        pub static ref SHAPE_MESHES: [&'static VoxelMesh; 8] = [&*CUBE, &*STAIR, &*CORNER_STAIR, &*SLAB, &*CUBE, &*CUBE, &*CUBE, &*PRISM];
     }
 }
 

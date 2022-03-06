@@ -41,7 +41,7 @@ async fn main() -> Result<(), ()> {
     let state = Arc::new(Mutex::new(State::new(&window).await));
 
     let state_clone = Arc::clone(&state);
-    generate_world(&mut scene, state_clone, UVec3::new(25, 5, 25));
+    generate_world(&mut scene, state_clone, UVec3::new(25, 3, 25));
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -102,12 +102,12 @@ async fn main() -> Result<(), ()> {
 pub fn generate_world(scene: &mut VoxelScene, state: Arc<Mutex<State>>, size: UVec3) {
     let mut state_lock = state.lock().unwrap();
     state_lock.render_passes.clear();
-    state_lock.add_render_pass();
+    state_lock.add_render_pass(wgpu::PrimitiveTopology::TriangleList);
 
     for x in 0..size.x {
         for y in 0..size.y {
             for z in 0..size.z {
-                scene.initialize_chunk(IVec3::new(x as i32, y as i32, z as i32));
+                scene.initialize_and_generate_chunk(IVec3::new(x as i32, y as i32, z as i32));
             }
         }
     }
@@ -118,6 +118,7 @@ pub fn generate_world(scene: &mut VoxelScene, state: Arc<Mutex<State>>, size: UV
     // Regenerate mesh when a mesh is ready for submission
     let state_clone = Arc::clone(&state);
     rayon::spawn(move || {
+        let mut pass_index = 0;
         let mut saved_meshes = HashMap::new();
         loop {
             let mut count = 0;
@@ -169,7 +170,6 @@ pub fn generate_world(scene: &mut VoxelScene, state: Arc<Mutex<State>>, size: UV
             let vert_count = combined_verts.len();
             let mut state_lock = state_clone.lock().unwrap();
 
-            let pass_index = state_lock.render_passes.len() - 1;
             let mut pass = state_lock.render_passes.remove(pass_index);
 
             pass.set_vertices(&state_lock.device, &mut combined_verts);
@@ -178,7 +178,8 @@ pub fn generate_world(scene: &mut VoxelScene, state: Arc<Mutex<State>>, size: UV
             state_lock.render_passes.push(pass);
 
             if vert_count > 100000 {
-                state_lock.add_render_pass();
+                state_lock.add_render_pass(wgpu::PrimitiveTopology::TriangleList);
+                pass_index = state_lock.render_passes.len() - 1;
                 saved_meshes.clear();
             }
         }

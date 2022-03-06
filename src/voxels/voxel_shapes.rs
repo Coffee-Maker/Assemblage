@@ -32,8 +32,8 @@ const SLAB: [u8; 6] = [
     0b_1100_0011, // South
     0b_1100_0011, // East
     0b_1100_0011, // West
-    0b_1100_0011, // Top
-    0b_1100_0011, // Bottom
+    0b_0000_0000, // Top
+    0b_1111_1111, // Bottom
 ];
 
 const INNER_PRISM_JUNCTION: [u8; 6] = [
@@ -94,20 +94,19 @@ fn get_shape_permutations() -> [u8; 1536] {
         let mut shape = SHAPES[(i << 5 >> 5) as usize]; // 32 rotations per shape
 
         // Iterate through all possible permutations of the orientation, assigning it to a NOT RANDOM spot in the orientation array
-        let rotation = i >> 3;
-        if rotation & 0b_0000_0001 != 0 {
-            shape = flip_north_south(shape);
-        }
-        if rotation & 0b_0000_0010 != 0 {
+        if i & 0b_0000_1000 != 0 {
             shape = flip_east_west(shape);
         }
-        if rotation & 0b_0000_0100 != 0 {
+        if i & 0b_0001_0000 != 0 {
             shape = flip_top_bottom(shape);
         }
-        if rotation & 0b_0000_1000 != 0 {
+        if i & 0b_0010_0000 != 0 {
+            shape = flip_north_south(shape);
+        }
+        if i & 0b_0100_0000 != 0 {
             shape = rotate_x(shape);
         }
-        if rotation & 0b_0001_0000 != 0 {
+        if i & 0b_1000_0000 != 0 {
             shape = rotate_z(shape);
         }
         for b in 0..6 {
@@ -153,12 +152,12 @@ fn flip_top_bottom(sides: [u8; 6]) -> [u8; 6] {
 
 fn rotate_x(sides: [u8; 6]) -> [u8; 6] {
     let mut r = [0; 6];
-    r[0] = sides[4]; // North
-    r[1] = sides[5]; // South
+    r[0] = sides[5]; // North
+    r[1] = sides[4]; // South
     r[2] = sides[2].rotate_right(2); // East
-    r[3] = sides[2].rotate_right(2); // West
-    r[4] = sides[1]; // Top
-    r[5] = sides[0]; // Bottom
+    r[3] = sides[3].rotate_right(2); // West
+    r[4] = sides[0]; // Top
+    r[5] = sides[1]; // Bottom
     r
 }
 
@@ -173,6 +172,19 @@ fn rotate_z(sides: [u8; 6]) -> [u8; 6] {
     r
 }
 
+pub struct OrientedVoxelDirections {
+    pub directions: [VoxelDirection; 6],
+}
+
+impl OrientedVoxelDirections {
+    pub fn new(directions: [VoxelDirection; 6]) -> Self {
+        Self { directions }
+    }
+    pub fn get_direction(&self, direction: VoxelDirection) -> VoxelDirection {
+        self.directions[direction.data as usize]
+    }
+}
+
 #[allow(dead_code)]
 #[rustfmt::skip]
 pub mod voxel_directions {
@@ -184,6 +196,15 @@ pub mod voxel_directions {
     pub const WEST: VoxelDirection      = VoxelDirection { data: 3 };
     pub const UP: VoxelDirection        = VoxelDirection { data: 4 };
     pub const DOWN: VoxelDirection      = VoxelDirection { data: 5 };
+
+    pub const ALL: [VoxelDirection; 6] = [
+        NORTH,
+        SOUTH,
+        EAST,
+        WEST,
+        UP,
+        DOWN,
+    ];
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash, Default)]
@@ -217,6 +238,53 @@ impl VoxelDirection {
             },
         }
     }
+
+    pub fn get_oriented_directions(orientation: VoxelOrientation) -> OrientedVoxelDirections {
+        let mut r = voxel_directions::ALL;
+        if orientation.extract_flip_x() {
+            (r[2], r[3]) = (r[3], r[2]);
+        }
+        if orientation.extract_flip_y() {
+            (r[4], r[5]) = (r[5], r[4]);
+        }
+        if orientation.extract_flip_z() {
+            (r[0], r[1]) = (r[1], r[0]);
+        }
+        if orientation.extract_rotate_x() {
+            (r[0], r[1], r[4], r[5]) = (r[4], r[5], r[1], r[0]);
+        }
+        if orientation.extract_rotate_z() {
+            (r[2], r[3], r[4], r[5]) = (r[5], r[4], r[2], r[3]);
+        }
+        OrientedVoxelDirections::new(r)
+    }
+}
+
+#[cfg(test)]
+mod direction_tests {
+    use glam::IVec3;
+
+    use crate::voxels::voxel_shapes::voxel_directions;
+
+    #[test]
+    fn flip_test() {
+        assert_eq!(voxel_directions::NORTH.flip(), voxel_directions::SOUTH);
+        assert_eq!(voxel_directions::SOUTH.flip(), voxel_directions::NORTH);
+        assert_eq!(voxel_directions::EAST.flip(), voxel_directions::WEST);
+        assert_eq!(voxel_directions::WEST.flip(), voxel_directions::EAST);
+        assert_eq!(voxel_directions::UP.flip(), voxel_directions::DOWN);
+        assert_eq!(voxel_directions::DOWN.flip(), voxel_directions::UP);
+    }
+
+    #[test]
+    fn as_vec_test() {
+        assert_eq!(voxel_directions::NORTH.as_vec(), IVec3::Z);
+        assert_eq!(voxel_directions::SOUTH.as_vec(), -IVec3::Z);
+        assert_eq!(voxel_directions::EAST.as_vec(), IVec3::X);
+        assert_eq!(voxel_directions::WEST.as_vec(), -IVec3::X);
+        assert_eq!(voxel_directions::UP.as_vec(), IVec3::Y);
+        assert_eq!(voxel_directions::DOWN.as_vec(), -IVec3::Y);
+    }
 }
 
 #[allow(dead_code)]
@@ -242,7 +310,7 @@ pub struct VoxelShape {
 
 impl VoxelShape {
     pub fn get_face_shape(shape: VoxelShape, direction: VoxelDirection) -> u8 {
-        SHAPE_ORIENTATIONS[((shape.data * 6) + direction.data) as usize]
+        SHAPE_ORIENTATIONS[(((shape.data as u32) * 6) + direction.data as u32) as usize]
     }
 
     pub fn face_contains(&self, face: VoxelDirection, other: (VoxelShape, VoxelDirection)) -> bool {
@@ -250,17 +318,41 @@ impl VoxelShape {
         VoxelShape::get_face_shape(*self, face) & other_shape == other_shape
     }
 
-    pub fn orient(&mut self, orientation: VoxelOrientation) {
+    pub fn orient_self(&mut self, orientation: VoxelOrientation) {
         self.data = (self.data & 0b_0000_0111) | orientation.data;
     }
 
-    pub fn extract_shape(&self) -> u8 { self.data << 5 >> 5 }
+    pub fn oriented(&self, orientation: VoxelOrientation) -> VoxelShape {
+        VoxelShape {
+            data: (self.data & 0b_0000_0111) | orientation.data,
+        }
+    }
 
-    pub fn extract_flip_x(&self) -> bool { self.data & 0b_0000_1000 == 0b_0000_1000 }
-    pub fn extract_flip_y(&self) -> bool { self.data & 0b_0001_0000 == 0b_0001_0000 }
-    pub fn extract_flip_z(&self) -> bool { self.data & 0b_0010_0000 == 0b_0010_0000 }
-    pub fn extract_rotate_x(&self) -> bool { self.data & 0b_0100_0000 == 0b_0100_0000 }
-    pub fn extract_rotate_z(&self) -> bool { self.data & 0b_1000_0000 == 0b_1000_0000 }
+    pub fn extract_shape(&self) -> u8 {
+        self.data << 5 >> 5
+    }
+
+    pub fn extract_flip_x(&self) -> bool {
+        self.data & 0b_0000_1000 == 0b_0000_1000
+    }
+    pub fn extract_flip_y(&self) -> bool {
+        self.data & 0b_0001_0000 == 0b_0001_0000
+    }
+    pub fn extract_flip_z(&self) -> bool {
+        self.data & 0b_0010_0000 == 0b_0010_0000
+    }
+    pub fn extract_rotate_x(&self) -> bool {
+        self.data & 0b_0100_0000 == 0b_0100_0000
+    }
+    pub fn extract_rotate_z(&self) -> bool {
+        self.data & 0b_1000_0000 == 0b_1000_0000
+    }
+
+    pub fn extract_orientation(&self) -> VoxelOrientation {
+        VoxelOrientation {
+            data: self.data & 0b_1111_1000,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -268,73 +360,93 @@ impl VoxelShape {
 pub mod voxel_orientations {
     use super::VoxelOrientation;
 
-    pub const DEFAULT: VoxelOrientation = VoxelOrientation { data: 0b_00_000 };
-    pub const BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_00_000 };
-    pub const BOTTOM_NORTH: VoxelOrientation = VoxelOrientation { data: 0b_00_000 };
-    pub const BOTTOM_NORTH_EAST: VoxelOrientation = VoxelOrientation { data: 0b_00_000 };
+    pub const DEFAULT: VoxelOrientation = VoxelOrientation { data: 0b_00_000_000 };
+    pub const BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_00_000_000 };
+    pub const BOTTOM_NORTH: VoxelOrientation = VoxelOrientation { data: 0b_00_000_000 };
+    pub const BOTTOM_NORTH_EAST: VoxelOrientation = VoxelOrientation { data: 0b_00_000_000 };
 
-    pub const BOTTOM_NORTH_WEST: VoxelOrientation = VoxelOrientation { data: 0b_00_001 };
+    pub const BOTTOM_NORTH_WEST: VoxelOrientation = VoxelOrientation { data: 0b_00_001_000 };
 
-    pub const BOTTOM_SOUTH: VoxelOrientation = VoxelOrientation { data: 0b_00_010 };
-    pub const BOTTOM_SOUTH_EAST: VoxelOrientation = VoxelOrientation { data: 0b_00_010 };
+    pub const TOP: VoxelOrientation = VoxelOrientation { data: 0b_00_010_000 };
+    pub const TOP_NORTH: VoxelOrientation = VoxelOrientation { data: 0b_00_010_000 };
+    pub const TOP_NORTH_EAST: VoxelOrientation = VoxelOrientation { data: 0b_00_010_000 };
 
-    pub const BOTTOM_SOUTH_WEST: VoxelOrientation = VoxelOrientation { data: 0b_00_011 };
+    pub const TOP_NORTH_WEST: VoxelOrientation = VoxelOrientation { data: 0b_00_011_000 };   
 
-    pub const TOP: VoxelOrientation = VoxelOrientation { data: 0b_00_100 };
-    pub const TOP_NORTH: VoxelOrientation = VoxelOrientation { data: 0b_00_100 };
-    pub const TOP_NORTH_EAST: VoxelOrientation = VoxelOrientation { data: 0b_00_100 };
+    pub const TOP_SOUTH: VoxelOrientation = VoxelOrientation { data: 0b_00_110_000 };
+    pub const TOP_SOUTH_EAST: VoxelOrientation = VoxelOrientation { data: 0b_00_110_000 };
 
-    pub const TOP_NORTH_WEST: VoxelOrientation = VoxelOrientation { data: 0b_00_101 };
+    pub const TOP_SOUTH_WEST: VoxelOrientation = VoxelOrientation { data: 0b_00_111_000 };
+    
+    pub const BOTTOM_SOUTH: VoxelOrientation = VoxelOrientation { data: 0b_00_100_000 };
+    pub const BOTTOM_SOUTH_EAST: VoxelOrientation = VoxelOrientation { data: 0b_00_100_000 };
 
-    pub const TOP_SOUTH: VoxelOrientation = VoxelOrientation { data: 0b_00_110 };
-    pub const TOP_SOUTH_EAST: VoxelOrientation = VoxelOrientation { data: 0b_00_110 };
+    pub const BOTTOM_SOUTH_WEST: VoxelOrientation = VoxelOrientation { data: 0b_00_101_000 };
 
-    pub const TOP_SOUTH_WEST: VoxelOrientation = VoxelOrientation { data: 0b_00_111 };
+    pub const NORTH: VoxelOrientation = VoxelOrientation { data: 0b_01_000_000 };
+    pub const NORTH_TOP: VoxelOrientation = VoxelOrientation { data: 0b_01_000_000 };
+    pub const NORTH_TOP_EAST: VoxelOrientation = VoxelOrientation { data: 0b_01_000_000 };
 
-    pub const NORTH: VoxelOrientation = VoxelOrientation { data: 0b_01_000 };
-    pub const NORTH_TOP: VoxelOrientation = VoxelOrientation { data: 0b_01_000 };
-    pub const NORTH_TOP_EAST: VoxelOrientation = VoxelOrientation { data: 0b_01_000 };
+    pub const NORTH_TOP_WEST: VoxelOrientation = VoxelOrientation { data: 0b_01_001_000 };
 
-    pub const NORTH_TOP_WEST: VoxelOrientation = VoxelOrientation { data: 0b_01_001 };
+    // Below may be incorrect
 
-    pub const SOUTH: VoxelOrientation = VoxelOrientation { data: 0b_01_010 };
-    pub const SOUTH_BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_01_010 };
-    pub const SOUTH_BOTTOM_EAST: VoxelOrientation = VoxelOrientation { data: 0b_01_010 };
+    pub const SOUTH: VoxelOrientation = VoxelOrientation { data: 0b_01_010_000 };
+    pub const SOUTH_BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_01_010_000 };
+    pub const SOUTH_BOTTOM_EAST: VoxelOrientation = VoxelOrientation { data: 0b_01_010_000 };
 
-    pub const SOUTH_TOP_WEST: VoxelOrientation = VoxelOrientation { data: 0b_01_011 };
+    pub const SOUTH_TOP_WEST: VoxelOrientation = VoxelOrientation { data: 0b_01_011_000 };
 
-    pub const NORTH_BOTTOM_EAST: VoxelOrientation = VoxelOrientation { data: 0b_01_100 };
-    pub const NORTH_BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_01_100 };
+    pub const NORTH_BOTTOM_EAST: VoxelOrientation = VoxelOrientation { data: 0b_01_100_000 };
+    pub const NORTH_BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_01_100_000 };
 
-    pub const NORTH_BOTTOM_WEST: VoxelOrientation = VoxelOrientation { data: 0b_01_101 };
+    pub const NORTH_BOTTOM_WEST: VoxelOrientation = VoxelOrientation { data: 0b_01_101_000 };
 
-    pub const SOUTH_BOTTOM_WEST: VoxelOrientation = VoxelOrientation { data: 0b_01_111 };
+    pub const SOUTH_BOTTOM_WEST: VoxelOrientation = VoxelOrientation { data: 0b_01_111_000 };
 
-    pub const WEST: VoxelOrientation = VoxelOrientation { data: 0b_10_000 };
-    pub const WEST_NORTH: VoxelOrientation = VoxelOrientation { data: 0b_10_000 };
-    pub const WEST_NORTH_BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_10_000 };
+    pub const WEST: VoxelOrientation = VoxelOrientation { data: 0b_10_000_000 };
+    pub const WEST_NORTH: VoxelOrientation = VoxelOrientation { data: 0b_10_000_000 };
+    pub const WEST_NORTH_BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_10_000_000 };
 
-    pub const WEST_NORTH_TOP: VoxelOrientation = VoxelOrientation { data: 0b_10_001 };
+    pub const WEST_NORTH_TOP: VoxelOrientation = VoxelOrientation { data: 0b_10_001_000 };
 
-    pub const EAST: VoxelOrientation = VoxelOrientation { data: 0b_10_010 };
-    pub const EAST_NORTH: VoxelOrientation = VoxelOrientation { data: 0b_10_010 };
-    pub const EAST_NORTH_BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_10_010 };
+    pub const EAST: VoxelOrientation = VoxelOrientation { data: 0b_10_010_000 };
+    pub const EAST_NORTH: VoxelOrientation = VoxelOrientation { data: 0b_10_010_000 };
+    pub const EAST_NORTH_BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_10_010_000 };
 
-    pub const EAST_NORTH_TOP: VoxelOrientation = VoxelOrientation { data: 0b_10_011 };
+    pub const EAST_NORTH_TOP: VoxelOrientation = VoxelOrientation { data: 0b_10_011_000 };
 
-    pub const EAST_SOUTH: VoxelOrientation = VoxelOrientation { data: 0b_10_100 };
-    pub const EAST_SOUTH_BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_10_100 };
+    pub const EAST_SOUTH: VoxelOrientation = VoxelOrientation { data: 0b_10_100_000 };
+    pub const EAST_SOUTH_BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_10_100_000 };
 
-    pub const WEST_SOUTH: VoxelOrientation = VoxelOrientation { data: 0b_10_101 };
-    pub const WEST_SOUTH_TOP: VoxelOrientation = VoxelOrientation { data: 0b_10_101 };
+    pub const WEST_SOUTH: VoxelOrientation = VoxelOrientation { data: 0b_10_101_000 };
+    pub const WEST_SOUTH_TOP: VoxelOrientation = VoxelOrientation { data: 0b_10_101_000 };
 
-    pub const WEST_SOUTH_BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_10_110 };
+    pub const WEST_SOUTH_BOTTOM: VoxelOrientation = VoxelOrientation { data: 0b_10_110_000 };
 
-    pub const EAST_SOUTH_TOP: VoxelOrientation = VoxelOrientation { data: 0b_10_111 };
+    pub const EAST_SOUTH_TOP: VoxelOrientation = VoxelOrientation { data: 0b_10_111_000 };
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash, Default)]
 #[repr(packed(1))]
 pub struct VoxelOrientation {
     pub data: u8,
+}
+
+impl VoxelOrientation {
+    pub fn extract_flip_x(&self) -> bool {
+        self.data & 0b_0000_1000 == 0b_0000_1000
+    }
+    pub fn extract_flip_y(&self) -> bool {
+        self.data & 0b_0001_0000 == 0b_0001_0000
+    }
+    pub fn extract_flip_z(&self) -> bool {
+        self.data & 0b_0010_0000 == 0b_0010_0000
+    }
+    pub fn extract_rotate_x(&self) -> bool {
+        self.data & 0b_0100_0000 == 0b_0100_0000
+    }
+    pub fn extract_rotate_z(&self) -> bool {
+        self.data & 0b_1000_0000 == 0b_1000_0000
+    }
 }

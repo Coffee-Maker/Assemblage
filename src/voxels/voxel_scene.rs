@@ -1,8 +1,9 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use dashmap::DashMap;
 use flume::{Receiver, Sender};
 use glam::{IVec3, UVec3};
 use noise::{NoiseFn, Perlin};
@@ -13,32 +14,35 @@ use crate::voxels::voxel_data::VoxelData;
 use crate::voxels::voxel_shapes::voxel_shapes;
 
 use super::voxel_mesh::get_voxel_mesh;
-use super::voxel_shapes::{voxel_directions, VoxelDirection, VoxelShape};
+use super::voxel_shapes::{voxel_directions, voxel_orientations, VoxelDirection, VoxelShape};
 
 pub const CHUNK_SIZE: u32 = 16;
+type ChunkData = Arc<DashMap<IVec3, VoxelChunk, ahash::RandomState>>;
 
 pub struct VoxelScene {
-    pub chunks: Arc<Mutex<HashMap<IVec3, VoxelChunk>>>,
+    pub chunks: ChunkData,
 
-    initialization_channel: (Sender<IVec3>, Receiver<IVec3>),
-    registration_channel: (Sender<VoxelChunk>, Receiver<VoxelChunk>),
+    initialization_channel: (
+        Sender<(IVec3, Option<Sender<IVec3>>)>,
+        Receiver<(IVec3, Option<Sender<IVec3>>)>,
+    ),
     generation_channel: (Sender<IVec3>, Receiver<IVec3>),
+    generation_pre_processor_channel: (Sender<IVec3>, Receiver<IVec3>),
 }
 
 impl VoxelScene {
     pub fn new() -> Self {
         Self {
-            chunks: Arc::new(Mutex::new(HashMap::default())),
+            chunks: Arc::new(DashMap::default()),
             initialization_channel: flume::unbounded(),
-            registration_channel: flume::unbounded(),
             generation_channel: flume::unbounded(),
+            generation_pre_processor_channel: flume::unbounded(),
         }
     }
 
     pub fn voxel_at(&self, position: &IVec3) -> Option<VoxelData> {
         let chunk_pos = Self::chunk_at(position);
-        let chunk_lock = self.chunks.lock().unwrap();
-        chunk_lock
+        self.chunks
             .get(&chunk_pos)
             .map(|chunk| chunk.voxel_scenespace_at(position).unwrap().to_owned())
     }
@@ -52,14 +56,14 @@ impl VoxelScene {
     }
 
     pub fn setup_chunk_processors(&mut self, mesh_sender: Sender<(IVec3, Mesh)>) {
-        for _i in 0..4 {
+        for _i in 0..2 {
             VoxelScene::initialization_processor(
+                Arc::clone(&self.chunks),
                 self.initialization_channel.1.clone(),
-                self.registration_channel.0.clone(),
             );
         }
 
-        for _i in 0..4 {
+        for _i in 0..2 {
             let chunks_clone = Arc::clone(&self.chunks);
             VoxelScene::generation_processor(
                 chunks_clone,
@@ -68,31 +72,44 @@ impl VoxelScene {
             );
         }
 
-        for _ in 0..1 {
+        for _i in 0..2 {
             let chunks_clone = Arc::clone(&self.chunks);
-            VoxelScene::registration_processor(
-                self.registration_channel.1.clone(),
+            VoxelScene::generation_pre_processor(
                 chunks_clone,
+                self.generation_pre_processor_channel.1.clone(),
+                self.initialization_channel.0.clone(),
                 self.generation_channel.0.clone(),
             );
         }
     }
 
-    pub fn initialize_chunk(&self, position: IVec3) {
-        self.initialization_channel.0.send(position).unwrap();
+    pub fn initialize_and_generate_chunk(&self, position: IVec3) {
+        self.initialization_channel
+            .0
+            .send((
+                position,
+                Some(self.generation_pre_processor_channel.0.clone()),
+            ))
+            .unwrap();
+        self.generation_pre_processor_channel
+            .0
+            .send(position)
+            .unwrap();
     }
 
     pub fn initialization_processor(
-        pos_receiver: Receiver<IVec3>,
-        chunk_sender: Sender<VoxelChunk>,
+        chunks: ChunkData,
+        pos_receiver: Receiver<(IVec3, Option<Sender<IVec3>>)>,
     ) {
         rayon::spawn(move || {
             println!("Started initialization processor");
-
+            let mut initialized_chunks = Vec::new();
             loop {
-                let chunk_pos = pos_receiver.recv().unwrap();
-
-                let mut chunk = VoxelChunk::new(chunk_pos);
+                let request = pos_receiver.recv().unwrap();
+                if initialized_chunks.contains(&request.0) {
+                    continue;
+                }
+                let mut chunk = VoxelChunk::new(request.0);
 
                 // Set chunk data
                 let noise = Perlin::new();
@@ -114,7 +131,7 @@ impl VoxelScene {
                         if density > 0.0 {
                             chunk.is_empty = false;
                             voxel.shape = if density < 0.5 {
-                                voxel_shapes::CORNER_STAIR
+                                voxel_shapes::SLAB.oriented(voxel_orientations::NORTH)
                             } else {
                                 voxel_shapes::CUBE
                             };
@@ -122,48 +139,79 @@ impl VoxelScene {
                         }
                     });
 
-                chunk_sender.send(chunk).unwrap();
+                initialized_chunks.push(request.0);
+                chunks.insert(request.0, chunk);
+                request.1.map(|s| s.send(request.0));
             }
         });
     }
 
-    pub fn registration_processor(
-        chunk_receiver: Receiver<VoxelChunk>,
-        chunks: Arc<Mutex<HashMap<IVec3, VoxelChunk>>>,
-        pos_sender: Sender<IVec3>,
-    ) {
-        rayon::spawn(move || loop {
-            let chunk = chunk_receiver.recv().unwrap();
-            let pos = chunk.position;
-            let mut chunks_lock = chunks.lock().unwrap();
-            chunks_lock.insert(pos, chunk);
-            pos_sender.send(pos).unwrap();
-        });
-    }
-
     pub fn generation_processor(
-        chunks: Arc<Mutex<HashMap<IVec3, VoxelChunk>>>,
+        chunks: ChunkData,
         pos_receiver: Receiver<IVec3>,
         mesh_sender: Sender<(IVec3, Mesh)>,
     ) {
         rayon::spawn(move || {
-            thread::sleep(Duration::from_secs(2)); // Dumb way to wait for neighbours to have data
             println!("Started generation processor");
             loop {
                 let chunk_pos = pos_receiver.recv().unwrap();
-                let chunks_lock = chunks.lock().unwrap();
-                let chunk = (*chunks_lock.get(&chunk_pos).unwrap()).clone();
-                drop(chunks_lock);
+
+                let chunk = (*chunks.get(&chunk_pos).unwrap()).clone();
                 let chunks_clone = Arc::clone(&chunks);
                 let mesh = chunk.generate_mesh(chunks_clone);
                 mesh_sender.send((chunk_pos, mesh)).unwrap();
             }
         });
     }
+
+    pub fn generation_pre_processor(
+        chunks: ChunkData,
+        pos_receiver: Receiver<IVec3>,
+        initialization_sender: Sender<(IVec3, Option<Sender<IVec3>>)>,
+        pos_sender: Sender<IVec3>,
+    ) {
+        rayon::spawn(move || {
+            println!("Started generation preprocessor");
+            // store a list of chunk positions
+            let mut chunks_to_generate = VecDeque::new();
+            loop {
+                let chunk_pos = pos_receiver.try_recv();
+                // if we did not receive a chunk, check the chunks_to_generate list
+                let chunk_pos = match chunk_pos {
+                    Ok(chunk_pos) => chunk_pos,
+                    Err(_e) => {
+                        if chunks_to_generate.len() > 0 {
+                            chunks_to_generate.pop_front().unwrap()
+                        } else {
+                            thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                    }
+                };
+
+                // get a list of neighbours
+                let mut failed = false;
+                for direction in voxel_directions::ALL {
+                    let neighbour_pos = chunk_pos + direction.as_vec();
+                    if !chunks.contains_key(&neighbour_pos) {
+                        failed = true;
+                        initialization_sender.send((neighbour_pos, None)).unwrap();
+                    }
+                }
+
+                // if all neighbours are generated, schedule the chunk to be generated
+                if !failed {
+                    pos_sender.send(chunk_pos).unwrap();
+                } else {
+                    chunks_to_generate.push_back(chunk_pos);
+                }
+            }
+        });
+    }
 }
 
 pub fn get_density(position: IVec3, noise: &Perlin) -> f64 {
-    let height_offset: f32 = 0.0;
+    let height_offset: f32 = 10.0;
     let height_blend: f32 = 1.0;
 
     let mut final_density = 0.0;
@@ -249,7 +297,7 @@ impl VoxelChunk {
         self.voxel_at_mut(position).shape = shape
     }
 
-    pub fn generate_mesh(&self, scene_chunks: Arc<Mutex<HashMap<IVec3, VoxelChunk>>>) -> Mesh {
+    pub fn generate_mesh(&self, scene_chunks: ChunkData) -> Mesh {
         let mut vertices = vec![];
         let mut indices = vec![];
 
@@ -301,7 +349,7 @@ pub fn pos_to_index(pos: &UVec3) -> u32 {
 #[inline(always)]
 fn generate_faces(
     voxel: &VoxelData,
-    scene_chunks: Arc<Mutex<HashMap<IVec3, VoxelChunk>>>,
+    scene_chunks: ChunkData,
     chunk: &VoxelChunk,
     position: &UVec3,
     vertices: &mut Vec<Vertex>,
@@ -313,18 +361,17 @@ fn generate_faces(
 
     let face_check = |direction: VoxelDirection| -> bool {
         let sample_position = global_position + direction.as_vec();
-        let scene_chunks_lock = scene_chunks.lock().unwrap();
         let neighbour = chunk.voxel_scenespace_at(&sample_position).map_or_else(
             || {
-                scene_chunks_lock
+                scene_chunks
                     .get(&VoxelScene::chunk_at(&sample_position))
-                    .map_or(None, |chunk| chunk.voxel_scenespace_at(&sample_position))
+                    .map_or(None, |chunk| {
+                        chunk.voxel_scenespace_at(&sample_position).cloned()
+                    })
             },
-            |voxel| Some(voxel),
+            |&voxel| Some(voxel),
         );
         neighbour.map_or(true, |neighbour| {
-            //println!("Self {:#08b}", VoxelShape::get_face_shape(voxel.shape, direction));
-            //println!("Neighbour {:#08b}", VoxelShape::get_face_shape(neighbour.shape, direction.flip()));
             neighbour.id == 0
                 || !neighbour
                     .shape
@@ -334,45 +381,50 @@ fn generate_faces(
 
     let mut append_mesh = |mesh: &Mesh| {
         let index_offset = vertices.len();
+
+        let flip_x = voxel.shape.extract_flip_x();
+        let flip_y = voxel.shape.extract_flip_y();
+        let flip_z = voxel.shape.extract_flip_z();
+        let flip_count = (flip_x as u32 + flip_y as u32 + flip_z as u32) % 2;
+
         indices.reserve(mesh.indices.len());
-        mesh.indices
-            .iter()
-            .for_each(|i| indices.push(i + index_offset as u32));
+        for index in 0..mesh.indices.len() {
+            indices.push(
+                (if (flip_count & 1) == 0 {
+                    mesh.indices[index]
+                } else {
+                    mesh.indices[mesh.indices.len() - index - 1]
+                }) + index_offset as u32,
+            );
+        }
 
         vertices.reserve(mesh.vertices.len());
+
         mesh.vertices.iter().for_each(|v| {
             let mut vert = v.clone();
-            let x = v.position[0]
-                * if voxel.shape.extract_flip_x() {
-                    -1.0
-                } else {
-                    1.0
-                };
-            let y = v.position[1]
-                * if voxel.shape.extract_flip_y() {
-                    -1.0
-                } else {
-                    1.0
-                };
-            let z = v.position[2]
-                * if voxel.shape.extract_flip_z() {
-                    -1.0
-                } else {
-                    1.0
-                };
-            let (y, z) = if voxel.shape.extract_rotate_x() {
-                (-z, y)
-            } else {
-                (y, z)
-            };
-            let (x, y) = if voxel.shape.extract_rotate_z() {
-                (y, -x)
-            } else {
-                (x, y)
-            };
-            vert.position[0] = x + f_position.x;
-            vert.position[1] = y + f_position.y;
-            vert.position[2] = z + f_position.z;
+            if flip_x {
+                vert.position[0] *= -1.0;
+                vert.normal[0] *= -1.0;
+            }
+            if voxel.shape.extract_flip_y() {
+                vert.position[1] *= -1.0;
+                vert.normal[1] *= -1.0;
+            }
+            if voxel.shape.extract_flip_z() {
+                vert.position[2] *= -1.0;
+                vert.normal[2] *= -1.0;
+            }
+            if voxel.shape.extract_rotate_x() {
+                (vert.position[1], vert.position[2]) = (vert.position[2], -vert.position[1]);
+                (vert.normal[1], vert.normal[2]) = (vert.normal[2], -vert.normal[1]);
+            }
+            if voxel.shape.extract_rotate_z() {
+                (vert.position[0], vert.position[1]) = (vert.position[1], -vert.position[0]);
+                (vert.normal[0], vert.normal[1]) = (vert.normal[1], -vert.normal[0]);
+            }
+            vert.position[0] += f_position.x;
+            vert.position[1] += f_position.y;
+            vert.position[2] += f_position.z;
             vertices.push(vert);
         });
     };
@@ -381,33 +433,34 @@ fn generate_faces(
 
     append_mesh(&shape_mesh.always);
 
+    let orientations = VoxelDirection::get_oriented_directions(voxel.shape.extract_orientation());
     // North
-    if face_check(voxel_directions::NORTH) {
+    if face_check(orientations.get_direction(voxel_directions::NORTH)) {
         append_mesh(&shape_mesh.north);
     }
 
     // South
-    if face_check(voxel_directions::SOUTH) {
+    if face_check(orientations.get_direction(voxel_directions::SOUTH)) {
         append_mesh(&shape_mesh.south);
     }
 
     // East
-    if face_check(voxel_directions::EAST) {
+    if face_check(orientations.get_direction(voxel_directions::EAST)) {
         append_mesh(&shape_mesh.east);
     }
 
     // West
-    if face_check(voxel_directions::WEST) {
+    if face_check(orientations.get_direction(voxel_directions::WEST)) {
         append_mesh(&shape_mesh.west);
     }
 
     // Up
-    if face_check(voxel_directions::UP) {
+    if face_check(orientations.get_direction(voxel_directions::UP)) {
         append_mesh(&shape_mesh.top);
     }
 
     // Down
-    if face_check(voxel_directions::DOWN) {
+    if face_check(orientations.get_direction(voxel_directions::DOWN)) {
         append_mesh(&shape_mesh.bottom);
     }
 }

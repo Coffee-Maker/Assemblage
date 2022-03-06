@@ -437,6 +437,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "5.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0834a35a3fce649144119e18da2a4d8ed12ef3862f47183fd46f625d072d96c"
+dependencies = [
+ "cfg-if 1.0.0",
+ "num_cpus",
+ "parking_lot 0.12.0",
+]
+
+[[package]]
 name = "deflate"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -673,9 +684,11 @@ dependencies = [
 name = "graphics-test"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "bytemuck",
  "cgmath",
+ "dashmap",
  "env_logger",
  "flume",
  "glam",

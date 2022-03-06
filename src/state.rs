@@ -77,15 +77,11 @@ impl State {
 
         // Camera
         let camera = Camera {
-            // position the camera one unit up and 2 units back
-            // +z is out of the screen
-            eye: (0.0, 100.0, 0.0).into(),
-            // have it look at the origin
-            target: (1.0, 99.5, 1.0).into(),
-            // which way is "up"
+            eye: (0.0, 5.0, -5.0).into(),
+            target: (0.0, 4.5, -4.0).into(),
             up: cgmath::Vector3::unit_y(),
             aspect: config.width as f32 / config.height as f32,
-            fovy: 70.0,
+            fovy: 90.0,
             znear: 0.1,
             zfar: 2048.0,
         };
@@ -150,7 +146,7 @@ impl State {
         }
     }
 
-    pub fn add_render_pass(&mut self) {
+    pub fn add_render_pass(&mut self, topology_type: wgpu::PrimitiveTopology) {
         let texture_bind_group_layout =
             self.device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -236,7 +232,7 @@ impl State {
                     }],
                 }),
                 primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    topology: topology_type,
                     strip_index_format: None,
                     front_face: wgpu::FrontFace::Ccw, // <- Polygons are wound counter-clockwise
                     cull_mode: Some(wgpu::Face::Back),
