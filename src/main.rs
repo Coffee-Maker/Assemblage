@@ -36,7 +36,10 @@ async fn main() -> Result<(), ()> {
     env_logger::init(); // Tells WGPU to inform us of errors, rather than failing silently
 
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().build(&event_loop).unwrap(); // Create a window
+    let window = WindowBuilder::new()
+        .with_maximized(true)
+        .build(&event_loop)
+        .unwrap(); // Create a window
     let mut scene = VoxelScene::new();
     let state = Arc::new(Mutex::new(State::new(&window).await));
 

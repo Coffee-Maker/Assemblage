@@ -1,3 +1,4 @@
+use glam::Vec3;
 use winit::event::ElementState;
 use winit::event::KeyboardInput;
 use winit::event::VirtualKeyCode;
@@ -77,9 +78,9 @@ impl State {
 
         // Camera
         let camera = Camera {
-            eye: (0.0, 5.0, -5.0).into(),
-            target: (0.0, 4.5, -4.0).into(),
-            up: cgmath::Vector3::unit_y(),
+            eye: (0.0, 50.0, 0.0).into(),
+            target: (1.0, 49.5, 1.0).into(),
+            up: Vec3::Y,
             aspect: config.width as f32 / config.height as f32,
             fovy: 90.0,
             znear: 0.1,

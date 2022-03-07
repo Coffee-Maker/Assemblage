@@ -3,10 +3,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use flume::{Receiver, Sender};
 use glam::{IVec3, UVec3};
 use noise::{NoiseFn, Perlin};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::rendering::mesh::Mesh;
 use crate::rendering::vertex::Vertex;
@@ -21,7 +22,7 @@ type ChunkData = Arc<DashMap<IVec3, VoxelChunk, ahash::RandomState>>;
 
 pub struct VoxelScene {
     pub chunks: ChunkData,
-
+    initialization_queue: Arc<DashSet<IVec3>>,
     initialization_channel: (
         Sender<(IVec3, Option<Sender<IVec3>>)>,
         Receiver<(IVec3, Option<Sender<IVec3>>)>,
@@ -34,6 +35,7 @@ impl VoxelScene {
     pub fn new() -> Self {
         Self {
             chunks: Arc::new(DashMap::default()),
+            initialization_queue: Arc::new(DashSet::default()),
             initialization_channel: flume::unbounded(),
             generation_channel: flume::unbounded(),
             generation_pre_processor_channel: flume::unbounded(),
@@ -55,42 +57,74 @@ impl VoxelScene {
         )
     }
 
+    pub fn request_initialize_chunk(
+        queue: Arc<DashSet<IVec3>>,
+        sender: Sender<(IVec3, Option<Sender<IVec3>>)>,
+        request: (IVec3, Option<Sender<IVec3>>),
+    ) {
+        if queue.contains(&request.0) {
+            return;
+        }
+        queue.insert(request.0);
+        sender.send(request).unwrap();
+    }
+
     pub fn setup_chunk_processors(&mut self, mesh_sender: Sender<(IVec3, Mesh)>) {
-        for _i in 0..2 {
-            VoxelScene::initialization_processor(
-                Arc::clone(&self.chunks),
-                self.initialization_channel.1.clone(),
-            );
+        println!("{} threads", rayon::current_num_threads());
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(8)
+            .build()
+            .unwrap();
+
+        for _i in 0..3 {
+            let chunks_clone = Arc::clone(&self.chunks);
+            let initialization_channel_receiver = self.initialization_channel.1.clone();
+            pool.spawn(move || {
+                println!("{} threads", rayon::current_num_threads());
+                VoxelScene::initialization_processor(chunks_clone, initialization_channel_receiver);
+            });
+        }
+
+        for _i in 0..3 {
+            let chunks_clone = Arc::clone(&self.chunks);
+            let generation_channel_receiver = self.generation_channel.1.clone();
+            let mesh_sender_clone = mesh_sender.clone();
+            pool.spawn(move || {
+                VoxelScene::generation_processor(
+                    chunks_clone,
+                    generation_channel_receiver,
+                    mesh_sender_clone,
+                );
+            });
         }
 
         for _i in 0..2 {
             let chunks_clone = Arc::clone(&self.chunks);
-            VoxelScene::generation_processor(
-                chunks_clone,
-                self.generation_channel.1.clone(),
-                mesh_sender.clone(),
-            );
-        }
-
-        for _i in 0..2 {
-            let chunks_clone = Arc::clone(&self.chunks);
-            VoxelScene::generation_pre_processor(
-                chunks_clone,
-                self.generation_pre_processor_channel.1.clone(),
-                self.initialization_channel.0.clone(),
-                self.generation_channel.0.clone(),
-            );
+            let generation_pre_processor_receiver = self.generation_pre_processor_channel.1.clone();
+            let initialization_queue_clone = Arc::clone(&self.initialization_queue);
+            let initialization_sender = self.initialization_channel.0.clone();
+            let generation_sender_clone = self.generation_channel.0.clone();
+            pool.spawn(move || {
+                VoxelScene::generation_pre_processor(
+                    chunks_clone,
+                    generation_pre_processor_receiver,
+                    initialization_queue_clone,
+                    initialization_sender,
+                    generation_sender_clone,
+                );
+            });
         }
     }
 
     pub fn initialize_and_generate_chunk(&self, position: IVec3) {
-        self.initialization_channel
-            .0
-            .send((
+        VoxelScene::request_initialize_chunk(
+            Arc::clone(&self.initialization_queue),
+            self.initialization_channel.0.clone(),
+            (
                 position,
                 Some(self.generation_pre_processor_channel.0.clone()),
-            ))
-            .unwrap();
+            ),
+        );
         self.generation_pre_processor_channel
             .0
             .send(position)
@@ -101,13 +135,14 @@ impl VoxelScene {
         chunks: ChunkData,
         pos_receiver: Receiver<(IVec3, Option<Sender<IVec3>>)>,
     ) {
-        rayon::spawn(move || {
-            println!("Started initialization processor");
-            let mut initialized_chunks = Vec::new();
-            loop {
-                let request = pos_receiver.recv().unwrap();
-                if initialized_chunks.contains(&request.0) {
-                    continue;
+        println!("Started initialization processor");
+        loop {
+            let chunks_to_process = pos_receiver.try_iter().collect::<Vec<_>>();
+            let chunks_clone = chunks.clone();
+            chunks_to_process.par_iter().for_each(move |request| {
+                if chunks_clone.contains_key(&request.0) {
+                    println!("ALREADY EXISTS");
+                    return;
                 }
                 let mut chunk = VoxelChunk::new(request.0);
 
@@ -131,7 +166,7 @@ impl VoxelScene {
                         if density > 0.0 {
                             chunk.is_empty = false;
                             voxel.shape = if density < 0.5 {
-                                voxel_shapes::SLAB.oriented(voxel_orientations::NORTH)
+                                voxel_shapes::SLAB.oriented(voxel_orientations::BOTTOM)
                             } else {
                                 voxel_shapes::CUBE
                             };
@@ -139,11 +174,10 @@ impl VoxelScene {
                         }
                     });
 
-                initialized_chunks.push(request.0);
-                chunks.insert(request.0, chunk);
-                request.1.map(|s| s.send(request.0));
-            }
-        });
+                chunks_clone.insert(request.0, chunk);
+                request.1.as_ref().map(|s| s.send(request.0));
+            });
+        }
     }
 
     pub fn generation_processor(
@@ -151,62 +185,56 @@ impl VoxelScene {
         pos_receiver: Receiver<IVec3>,
         mesh_sender: Sender<(IVec3, Mesh)>,
     ) {
-        rayon::spawn(move || {
-            println!("Started generation processor");
-            loop {
-                let chunk_pos = pos_receiver.recv().unwrap();
+        println!("Started generation processor");
+        loop {
+            let chunk_pos = pos_receiver.recv().unwrap();
 
-                let chunk = (*chunks.get(&chunk_pos).unwrap()).clone();
-                let chunks_clone = Arc::clone(&chunks);
-                let mesh = chunk.generate_mesh(chunks_clone);
-                mesh_sender.send((chunk_pos, mesh)).unwrap();
-            }
-        });
+            let chunk = (*chunks.get(&chunk_pos).unwrap()).clone();
+            let chunks_clone = Arc::clone(&chunks);
+            let mesh = chunk.generate_mesh(chunks_clone);
+            mesh_sender.send((chunk_pos, mesh)).unwrap();
+        }
     }
 
     pub fn generation_pre_processor(
         chunks: ChunkData,
         pos_receiver: Receiver<IVec3>,
+        initialization_queue: Arc<DashSet<IVec3>>,
         initialization_sender: Sender<(IVec3, Option<Sender<IVec3>>)>,
         pos_sender: Sender<IVec3>,
     ) {
-        rayon::spawn(move || {
-            println!("Started generation preprocessor");
-            // store a list of chunk positions
-            let mut chunks_to_generate = VecDeque::new();
-            loop {
-                let chunk_pos = pos_receiver.try_recv();
-                // if we did not receive a chunk, check the chunks_to_generate list
-                let chunk_pos = match chunk_pos {
-                    Ok(chunk_pos) => chunk_pos,
-                    Err(_e) => {
-                        if chunks_to_generate.len() > 0 {
-                            chunks_to_generate.pop_front().unwrap()
-                        } else {
-                            thread::sleep(Duration::from_millis(10));
-                            continue;
-                        }
-                    }
-                };
-
+        println!("Started generation pre-processor");
+        // store a list of chunk positions
+        let mut chunks_to_generate = VecDeque::new();
+        loop {
+            let mut chunk_positions = pos_receiver.try_iter().collect::<Vec<_>>();
+            chunk_positions.extend(chunks_to_generate.iter());
+            chunks_to_generate.clear();
+            for chunk_pos in chunk_positions {
                 // get a list of neighbours
                 let mut failed = false;
                 for direction in voxel_directions::ALL {
                     let neighbour_pos = chunk_pos + direction.as_vec();
                     if !chunks.contains_key(&neighbour_pos) {
                         failed = true;
-                        initialization_sender.send((neighbour_pos, None)).unwrap();
+                        VoxelScene::request_initialize_chunk(
+                            initialization_queue.clone(),
+                            initialization_sender.clone(),
+                            (neighbour_pos, None),
+                        );
                     }
                 }
 
-                // if all neighbours are generated, schedule the chunk to be generated
-                if !failed {
-                    pos_sender.send(chunk_pos).unwrap();
+                // if all neighbours are initialized, schedule the chunk to be generated
+                if !failed && chunks.contains_key(&chunk_pos) {
+                    if !chunks.get(&chunk_pos).unwrap().is_empty {
+                        pos_sender.send(chunk_pos).unwrap();
+                    }
                 } else {
-                    chunks_to_generate.push_back(chunk_pos);
+                    chunks_to_generate.push_front(chunk_pos);
                 }
             }
-        });
+        }
     }
 }
 

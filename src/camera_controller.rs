@@ -1,4 +1,4 @@
-use cgmath::Vector3;
+use glam::Vec3;
 use winit::event::{ElementState, KeyboardInput, VirtualKeyCode, WindowEvent};
 
 use crate::rendering::camera::Camera;
@@ -83,10 +83,9 @@ impl CameraController {
     }
 
     pub fn update_camera(&self, camera: &mut Camera) {
-        use cgmath::InnerSpace;
         let forward = camera.target - camera.eye;
         let forward_norm = forward.normalize();
-        let forward_mag = forward.magnitude();
+        let forward_mag = forward.length();
 
         // Prevents glitching when camera gets too close to the
         // center of the scene.
@@ -100,27 +99,27 @@ impl CameraController {
         }
 
         if self.is_up_pressed {
-            camera.eye += Vector3::unit_y() * self.speed;
-            camera.target += Vector3::unit_y() * self.speed;
+            camera.eye += Vec3::Y * self.speed;
+            camera.target += Vec3::Y * self.speed;
         }
         if self.is_down_pressed {
-            camera.eye -= Vector3::unit_y() * self.speed;
-            camera.target -= Vector3::unit_y() * self.speed;
+            camera.eye -= Vec3::Y * self.speed;
+            camera.target -= Vec3::Y * self.speed;
         }
 
         let right = forward_norm.cross(camera.up) * 0.1;
 
         // Redo radius calc in case the fowrard/backward is pressed.
         let forward = camera.target - camera.eye;
-        let forward_mag = forward.magnitude();
+        let forward_mag = forward.length();
 
         if self.is_right_pressed {
             camera.eye = camera.target
-                - (forward + right * self.speed / forward_mag).normalize() * forward_mag;
+                - (forward - right * self.speed / forward_mag).normalize() * forward_mag;
         }
         if self.is_left_pressed {
             camera.eye = camera.target
-                - (forward - right * self.speed / forward_mag).normalize() * forward_mag;
+                - (forward + right * self.speed / forward_mag).normalize() * forward_mag;
         }
         if self.is_pitch_up_pressed {
             camera.eye = camera.target
