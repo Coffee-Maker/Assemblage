@@ -1,6 +1,6 @@
 use super::vertex::Vertex;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
@@ -14,7 +14,7 @@ impl Mesh {
         }
     }
 
-    pub fn add_custom(
+    pub fn append_custom(
         mut self,
         vertices: Vec<[f32; 3]>,
         indices: Vec<u32>,
@@ -42,7 +42,7 @@ impl Mesh {
         self
     }
 
-    pub fn add_quad(mut self, quad_verts: [[f32; 3]; 4], normal: [f32; 3]) -> Mesh {
+    pub fn append_quad(mut self, quad_verts: [[f32; 3]; 4], normal: [f32; 3]) -> Mesh {
         let index_offset = self.vertices.len() as u32;
         self.indices.append(&mut vec![
             index_offset,
@@ -91,7 +91,7 @@ impl Mesh {
         self
     }
 
-    pub fn add_tri(mut self, quad_verts: [[f32; 3]; 3], normal: [f32; 3]) -> Mesh {
+    pub fn append_tri(mut self, quad_verts: [[f32; 3]; 3], normal: [f32; 3]) -> Mesh {
         let index_offset = self.vertices.len() as u32;
         self.indices
             .append(&mut vec![index_offset, index_offset + 2, index_offset + 1]);

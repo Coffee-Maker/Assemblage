@@ -1,28 +1,43 @@
 #![feature(int_roundings)]
 
+mod ecs;
+mod input_manager;
+mod physics;
+mod rendering;
+mod state;
+mod time;
+mod voxels;
+
+use ecs::{
+    components::{
+        self,
+        camera::Camera,
+        player_components::Player,
+        transformation_components::{Position, Rotation},
+    },
+    systems::{camera_systems::update_camera_system, player_controller::update_players_system},
+    world::World,
+};
+use input_manager::update_inputs;
+use legion::IntoQuery;
+use legion::{Resources, Schedule};
 use mimalloc::MiMalloc;
+use parking_lot::RwLock;
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use state::*;
+use std::{collections::HashMap, sync::Arc, time::Instant};
+use time::Time;
+use voxels::voxel_scene::CHUNK_SIZE;
+use wgpu::PrimitiveTopology;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
 #[macro_use]
 extern crate lazy_static;
+extern crate nalgebra as na;
 
-mod camera_controller;
-mod rendering;
-mod state;
-mod voxels;
-
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
-
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
-use state::*;
-use voxels::voxel_scene::CHUNK_SIZE;
-
-use glam::{IVec3, UVec3};
+use glam::{IVec3, Quat, UVec3, Vec3};
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -36,15 +51,69 @@ async fn main() -> Result<(), ()> {
     env_logger::init(); // Tells WGPU to inform us of errors, rather than failing silently
 
     let event_loop = EventLoop::new();
+    // Create a window
     let window = WindowBuilder::new()
         .with_maximized(true)
         .build(&event_loop)
-        .unwrap(); // Create a window
-    let mut scene = VoxelScene::new();
-    let state = Arc::new(Mutex::new(State::new(&window).await));
+        .unwrap();
 
+    let state = Arc::new(RwLock::new(State::new(&window).await));
+
+    // Create a Legion world (ECS)
+    let world = Arc::new(RwLock::new(World {
+        legion_world: legion::World::default(),
+    }));
+
+    // Setup entity world
     let state_clone = Arc::clone(&state);
-    generate_world(&mut scene, state_clone, UVec3::new(25, 3, 25));
+    let world_clone = Arc::clone(&world);
+    rayon::spawn(move || {
+        let state_lock = state_clone.write();
+        let mut camera = rendering::camera::Camera::new(&state_lock);
+        drop(state_lock);
+
+        camera.add_render_pass(Arc::clone(&state_clone), PrimitiveTopology::TriangleList);
+
+        let mut world_lock = world_clone.write();
+        world_lock.legion_world.push((
+            Position(Vec3::ZERO),
+            Rotation(Quat::IDENTITY),
+            Player { fly_speed: 50.0 },
+            components::camera::Camera { camera },
+        ));
+        drop(world_lock);
+
+        // Add systems
+        let mut schedule = Schedule::builder()
+            .add_system(update_players_system())
+            .add_system(update_camera_system())
+            .build();
+
+        let mut resources = Resources::default(); // Resources are accessible to all systems that use them
+
+        let start = Instant::now();
+        let mut loop_time = Instant::now();
+        loop {
+            update_inputs(); // Update the inputs before sending firing the systems
+            resources.insert(Time {
+                time: start.elapsed().as_secs_f64(),
+                delta_time: loop_time.elapsed().as_secs_f64(),
+            });
+            loop_time = Instant::now();
+
+            let mut world_lock = world_clone.write();
+            schedule.execute(&mut world_lock.legion_world, &mut resources);
+        }
+    });
+
+    // Setup voxel scene
+    let mut scene = VoxelScene::new();
+    generate_world(
+        &mut scene,
+        Arc::clone(&state),
+        Arc::clone(&world),
+        UVec3::new(50, 5, 50),
+    );
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -52,19 +121,10 @@ async fn main() -> Result<(), ()> {
                 ref event,
                 window_id,
             } if window_id == window.id() => {
-                let mut state_lock = state.lock().unwrap();
+                let mut state_lock = state.write();
                 if !state_lock.input(event) {
                     match event {
-                        WindowEvent::CloseRequested
-                        | WindowEvent::KeyboardInput {
-                            input:
-                                KeyboardInput {
-                                    state: ElementState::Pressed,
-                                    virtual_keycode: Some(VirtualKeyCode::Escape),
-                                    ..
-                                },
-                            ..
-                        } => *control_flow = ControlFlow::Exit,
+                        WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
                         WindowEvent::Resized(physical_size) => {
                             state_lock.resize(*physical_size);
                         }
@@ -77,14 +137,21 @@ async fn main() -> Result<(), ()> {
             }
 
             Event::RedrawRequested(window_id) if window_id == window.id() => {
-                let mut state_lock = state.lock().unwrap();
-                state_lock.update();
-                match state_lock.render() {
+                let world_lock = world.read();
+                let mut query = <&Camera>::query();
+
+                let cameras = query
+                    .iter(&world_lock.legion_world)
+                    .map(|cam| &cam.camera)
+                    .collect();
+
+                let mut state_lock = state.write();
+                match state_lock.render(cameras) {
                     Ok(_) => {}
                     // Reconfigure the surface if lost
                     Err(wgpu::SurfaceError::Lost) => {
                         let size = state_lock.size;
-                        state_lock.resize(size)
+                        state_lock.resize(size);
                     }
                     // The system is out of memory, we should probably quit
                     Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
@@ -102,11 +169,12 @@ async fn main() -> Result<(), ()> {
     });
 }
 
-pub fn generate_world(scene: &mut VoxelScene, state: Arc<Mutex<State>>, size: UVec3) {
-    let mut state_lock = state.lock().unwrap();
-    state_lock.render_passes.clear();
-    state_lock.add_render_pass(wgpu::PrimitiveTopology::TriangleList);
-
+pub fn generate_world(
+    scene: &mut VoxelScene,
+    state: Arc<RwLock<State>>,
+    world: Arc<RwLock<World>>,
+    size: UVec3,
+) {
     for x in 0..size.x {
         for y in 0..size.y {
             for z in 0..size.z {
@@ -118,25 +186,19 @@ pub fn generate_world(scene: &mut VoxelScene, state: Arc<Mutex<State>>, size: UV
     let (tx, rx) = flume::unbounded();
     scene.setup_chunk_processors(tx);
 
-    // Regenerate mesh when a mesh is ready for submission
-    let state_clone = Arc::clone(&state);
     rayon::spawn(move || {
         let mut pass_index = 0;
         let mut saved_meshes = HashMap::new();
         loop {
-            let mut count = 0;
-            loop {
-                let data = rx.try_recv();
-                match data {
-                    Ok(data) => {
-                        saved_meshes.insert(data.0, data.1);
-                    }
-                    Err(_) => break,
-                }
-                if count > 300 {
-                    break;
-                }
-                count += 1;
+            let mut regenerate = false;
+            rx.try_iter().for_each(|(k, v)| {
+                saved_meshes.insert(k, v);
+                regenerate = true;
+            });
+            if !regenerate {
+                // Nothing to process, wait for something
+                let (k, v) = rx.recv().unwrap();
+                saved_meshes.insert(k, v);
             }
 
             let meshes = saved_meshes
@@ -155,7 +217,6 @@ pub fn generate_world(scene: &mut VoxelScene, state: Arc<Mutex<State>>, size: UV
                     mesh
                 })
                 .collect::<Vec<Mesh>>();
-
             let mut combined_verts = Vec::new();
             let mut combined_indices = Vec::new();
             meshes
@@ -171,18 +232,28 @@ pub fn generate_world(scene: &mut VoxelScene, state: Arc<Mutex<State>>, size: UV
                 });
 
             let vert_count = combined_verts.len();
-            let mut state_lock = state_clone.lock().unwrap();
 
-            let mut pass = state_lock.render_passes.remove(pass_index);
+            let mut world_lock = world.write();
+            let mut query = <&mut Camera>::query();
+            let mut cameras: Vec<&mut rendering::camera::Camera> = query
+                .iter_mut(&mut world_lock.legion_world)
+                .map(|cam| &mut cam.camera)
+                .collect();
 
+            let cam_index = cameras.len() - 1;
+            let camera = cameras.get_mut(cam_index).unwrap();
+
+            let mut pass = camera.render_passes.remove(pass_index);
+
+            let state_lock = state.read();
             pass.set_vertices(&state_lock.device, &mut combined_verts);
             pass.set_indices(&state_lock.device, &mut combined_indices);
+            drop(state_lock);
 
-            state_lock.render_passes.push(pass);
-
+            camera.render_passes.push(pass);
             if vert_count > 100000 {
-                state_lock.add_render_pass(wgpu::PrimitiveTopology::TriangleList);
-                pass_index = state_lock.render_passes.len() - 1;
+                camera.add_render_pass(Arc::clone(&state), wgpu::PrimitiveTopology::TriangleList);
+                pass_index = camera.render_passes.len() - 1;
                 saved_meshes.clear();
             }
         }

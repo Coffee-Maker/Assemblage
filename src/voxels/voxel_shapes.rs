@@ -304,9 +304,17 @@ pub mod voxel_shapes {
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash, Default)]
 #[repr(packed(1))]
+// TODO: Refactor this to just wrap the u8 type
 pub struct VoxelShape {
     pub data: u8,
 }
+
+// [7] Rotate Z
+// [6] Rotate X
+// [5] Flip Y
+// [4] Flip X
+// [3] Flip Z
+// [2, 1, 0] Index of shape
 
 impl VoxelShape {
     pub fn get_face_shape(shape: VoxelShape, direction: VoxelDirection) -> u8 {

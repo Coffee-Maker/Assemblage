@@ -1,13 +1,11 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 
 use dashmap::{DashMap, DashSet};
 use flume::{Receiver, Sender};
 use glam::{IVec3, UVec3};
-use noise::{NoiseFn, Perlin};
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::ThreadPool;
+use simdnoise::NoiseBuilder;
 
 use crate::rendering::mesh::Mesh;
 use crate::rendering::vertex::Vertex;
@@ -18,10 +16,10 @@ use super::voxel_mesh::get_voxel_mesh;
 use super::voxel_shapes::{voxel_directions, voxel_orientations, VoxelDirection, VoxelShape};
 
 pub const CHUNK_SIZE: u32 = 16;
-type ChunkData = Arc<DashMap<IVec3, VoxelChunk, ahash::RandomState>>;
+type ChunkMap = Arc<DashMap<IVec3, VoxelChunk, ahash::RandomState>>;
 
 pub struct VoxelScene {
-    pub chunks: ChunkData,
+    pub chunks: ChunkMap,
     initialization_queue: Arc<DashSet<IVec3>>,
     initialization_channel: (
         Sender<(IVec3, Option<Sender<IVec3>>)>,
@@ -29,6 +27,7 @@ pub struct VoxelScene {
     ),
     generation_channel: (Sender<IVec3>, Receiver<IVec3>),
     generation_pre_processor_channel: (Sender<IVec3>, Receiver<IVec3>),
+    thread_pool: ThreadPool,
 }
 
 impl VoxelScene {
@@ -39,6 +38,10 @@ impl VoxelScene {
             initialization_channel: flume::unbounded(),
             generation_channel: flume::unbounded(),
             generation_pre_processor_channel: flume::unbounded(),
+            thread_pool: rayon::ThreadPoolBuilder::new()
+                .num_threads(8)
+                .build()
+                .unwrap(),
         }
     }
 
@@ -70,17 +73,10 @@ impl VoxelScene {
     }
 
     pub fn setup_chunk_processors(&mut self, mesh_sender: Sender<(IVec3, Mesh)>) {
-        println!("{} threads", rayon::current_num_threads());
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(8)
-            .build()
-            .unwrap();
-
         for _i in 0..3 {
             let chunks_clone = Arc::clone(&self.chunks);
             let initialization_channel_receiver = self.initialization_channel.1.clone();
-            pool.spawn(move || {
-                println!("{} threads", rayon::current_num_threads());
+            self.thread_pool.spawn(move || {
                 VoxelScene::initialization_processor(chunks_clone, initialization_channel_receiver);
             });
         }
@@ -89,7 +85,7 @@ impl VoxelScene {
             let chunks_clone = Arc::clone(&self.chunks);
             let generation_channel_receiver = self.generation_channel.1.clone();
             let mesh_sender_clone = mesh_sender.clone();
-            pool.spawn(move || {
+            self.thread_pool.spawn(move || {
                 VoxelScene::generation_processor(
                     chunks_clone,
                     generation_channel_receiver,
@@ -104,7 +100,7 @@ impl VoxelScene {
             let initialization_queue_clone = Arc::clone(&self.initialization_queue);
             let initialization_sender = self.initialization_channel.0.clone();
             let generation_sender_clone = self.generation_channel.0.clone();
-            pool.spawn(move || {
+            self.thread_pool.spawn(move || {
                 VoxelScene::generation_pre_processor(
                     chunks_clone,
                     generation_pre_processor_receiver,
@@ -114,6 +110,11 @@ impl VoxelScene {
                 );
             });
         }
+
+        println!(
+            "[INFO] World generation initialized with {} threads",
+            self.thread_pool.current_num_threads()
+        );
     }
 
     pub fn initialize_and_generate_chunk(&self, position: IVec3) {
@@ -125,47 +126,61 @@ impl VoxelScene {
                 Some(self.generation_pre_processor_channel.0.clone()),
             ),
         );
-        self.generation_pre_processor_channel
-            .0
-            .send(position)
-            .unwrap();
     }
 
     pub fn initialization_processor(
-        chunks: ChunkData,
+        chunks: ChunkMap,
         pos_receiver: Receiver<(IVec3, Option<Sender<IVec3>>)>,
     ) {
         println!("Started initialization processor");
         loop {
-            let chunks_to_process = pos_receiver.try_iter().collect::<Vec<_>>();
-            let chunks_clone = chunks.clone();
-            chunks_to_process.par_iter().for_each(move |request| {
-                if chunks_clone.contains_key(&request.0) {
-                    println!("ALREADY EXISTS");
+            let mut chunks_to_process = pos_receiver.try_iter().collect::<Vec<_>>();
+            if chunks_to_process.len() == 0 {
+                chunks_to_process = vec![pos_receiver.recv().unwrap()]; // Nothing to process, wait for something
+            }
+            chunks_to_process.iter().for_each(|(chunk_pos, callback)| {
+                if chunks.contains_key(&chunk_pos) {
+                    println!("INITIALIZING CHUNK THAT ALREADY EXISTS!");
                     return;
                 }
-                let mut chunk = VoxelChunk::new(request.0);
+                let mut chunk = VoxelChunk::new(*chunk_pos);
 
                 // Set chunk data
-                let noise = Perlin::new();
+                let base_wavelength = 500.0;
+
                 let chunk_pos_scenespace = chunk.scenespace_pos();
+                let (noise, _min, _max) = NoiseBuilder::fbm_3d_offset(
+                    chunk_pos_scenespace.x as f32,
+                    CHUNK_SIZE as usize,
+                    chunk_pos_scenespace.y as f32,
+                    CHUNK_SIZE as usize,
+                    chunk_pos_scenespace.z as f32,
+                    CHUNK_SIZE as usize,
+                )
+                .with_freq(1.0 / base_wavelength)
+                .with_octaves(2)
+                .with_lacunarity(5.0)
+                .with_gain(0.15)
+                .generate();
+
+                let range = 0.025; // fbm produces values up to ~0.02, or 1/50th of a block but as it has additive octaves, the value needs to be slightly larger
+                let height_blend = 40.0;
+
                 chunk
                     .voxels
                     .iter_mut()
                     .enumerate()
                     .for_each(|(index, voxel)| {
                         let voxel_pos = index_to_pos(index as u32);
-                        let density = get_density(
-                            IVec3::new(
-                                chunk_pos_scenespace.x + voxel_pos.x as i32,
-                                chunk_pos_scenespace.y + voxel_pos.y as i32,
-                                chunk_pos_scenespace.z + voxel_pos.z as i32,
-                            ),
-                            &noise,
-                        ) as f32;
+                        let density = noise
+                            .get(pos_to_index_inverse(&voxel_pos) as usize)
+                            .unwrap()
+                            - ((voxel_pos.y as i32 + chunk_pos_scenespace.y) as f32
+                                * (range / height_blend))
+                            + range;
                         if density > 0.0 {
                             chunk.is_empty = false;
-                            voxel.shape = if density < 0.5 {
+                            voxel.shape = if density < (range / height_blend) * 0.5 {
                                 voxel_shapes::SLAB.oriented(voxel_orientations::BOTTOM)
                             } else {
                                 voxel_shapes::CUBE
@@ -174,21 +189,20 @@ impl VoxelScene {
                         }
                     });
 
-                chunks_clone.insert(request.0, chunk);
-                request.1.as_ref().map(|s| s.send(request.0));
+                chunks.insert(*chunk_pos, chunk);
+                callback.as_ref().map(|s| s.send(*chunk_pos));
             });
         }
     }
 
     pub fn generation_processor(
-        chunks: ChunkData,
+        chunks: ChunkMap,
         pos_receiver: Receiver<IVec3>,
         mesh_sender: Sender<(IVec3, Mesh)>,
     ) {
         println!("Started generation processor");
         loop {
             let chunk_pos = pos_receiver.recv().unwrap();
-
             let chunk = (*chunks.get(&chunk_pos).unwrap()).clone();
             let chunks_clone = Arc::clone(&chunks);
             let mesh = chunk.generate_mesh(chunks_clone);
@@ -197,7 +211,7 @@ impl VoxelScene {
     }
 
     pub fn generation_pre_processor(
-        chunks: ChunkData,
+        chunks: ChunkMap,
         pos_receiver: Receiver<IVec3>,
         initialization_queue: Arc<DashSet<IVec3>>,
         initialization_sender: Sender<(IVec3, Option<Sender<IVec3>>)>,
@@ -210,6 +224,9 @@ impl VoxelScene {
             let mut chunk_positions = pos_receiver.try_iter().collect::<Vec<_>>();
             chunk_positions.extend(chunks_to_generate.iter());
             chunks_to_generate.clear();
+            if chunk_positions.len() == 0 {
+                chunk_positions = vec![pos_receiver.recv().unwrap()]; // Nothing left in queue, wait for something
+            }
             for chunk_pos in chunk_positions {
                 // get a list of neighbours
                 let mut failed = false;
@@ -236,28 +253,6 @@ impl VoxelScene {
             }
         }
     }
-}
-
-pub fn get_density(position: IVec3, noise: &Perlin) -> f64 {
-    let height_offset: f32 = 10.0;
-    let height_blend: f32 = 1.0;
-
-    let mut final_density = 0.0;
-    final_density += perlin_scaled(position, noise, 25.0, 200.0);
-    final_density += perlin_scaled(position, noise, 10.0, 100.0);
-    final_density += perlin_scaled(position, noise, 5.0, 20.0);
-
-    final_density -= ((position.y as f32 / height_blend) - height_offset) as f64;
-    final_density
-}
-
-pub fn perlin_scaled(position: IVec3, noise: &Perlin, amplitude: f32, wavelength: f32) -> f64 {
-    let scaled_position = position.as_vec3() / wavelength;
-    noise.get([
-        scaled_position.x as f64,
-        scaled_position.y as f64,
-        scaled_position.z as f64,
-    ]) * amplitude as f64
 }
 
 #[derive(Clone)]
@@ -325,7 +320,7 @@ impl VoxelChunk {
         self.voxel_at_mut(position).shape = shape
     }
 
-    pub fn generate_mesh(&self, scene_chunks: ChunkData) -> Mesh {
+    pub fn generate_mesh(&self, scene_chunks: ChunkMap) -> Mesh {
         let mut vertices = vec![];
         let mut indices = vec![];
 
@@ -374,10 +369,14 @@ pub fn pos_to_index(pos: &UVec3) -> u32 {
     (pos.x * CHUNK_SIZE * CHUNK_SIZE) + (pos.y * CHUNK_SIZE) + pos.z
 }
 
+pub fn pos_to_index_inverse(pos: &UVec3) -> u32 {
+    (pos.z * CHUNK_SIZE * CHUNK_SIZE) + (pos.y * CHUNK_SIZE) + pos.x
+}
+
 #[inline(always)]
 fn generate_faces(
     voxel: &VoxelData,
-    scene_chunks: ChunkData,
+    scene_chunks: ChunkMap,
     chunk: &VoxelChunk,
     position: &UVec3,
     vertices: &mut Vec<Vertex>,
@@ -461,7 +460,9 @@ fn generate_faces(
 
     append_mesh(&shape_mesh.always);
 
+    // TODO: Consider caching orientations?
     let orientations = VoxelDirection::get_oriented_directions(voxel.shape.extract_orientation());
+
     // North
     if face_check(orientations.get_direction(voxel_directions::NORTH)) {
         append_mesh(&shape_mesh.north);
