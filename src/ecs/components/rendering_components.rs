@@ -1,7 +1,12 @@
-use crate::rendering::mesh::Mesh;
+use std::{fmt::Debug, sync::Arc};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MeshRenderer<'a> {
-    pub mesh: &'a Mesh,
-    pub material: &'a Material,
+use parking_lot::RwLock;
+
+use crate::rendering::{material::Material, mesh::Mesh};
+
+#[derive(Clone, Debug)]
+pub struct MeshRenderer {
+    pub mesh: Arc<RwLock<Mesh>>,
+    pub material: Arc<RwLock<dyn Material>>,
+    pub render_layer: String,
 }

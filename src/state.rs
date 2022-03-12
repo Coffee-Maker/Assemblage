@@ -1,9 +1,14 @@
+use std::sync::Arc;
+
 use crate::input_manager::set_key;
 use crate::input_manager::set_mouse_button;
 use crate::input_manager::set_mouse_pos;
 use crate::input_manager::PressState;
 use crate::rendering::camera::Camera;
+use crate::rendering::render_pass_data::render_layers;
 use crate::rendering::texture;
+use parking_lot::RwLock;
+use wgpu::BindGroupLayout;
 use winit::event::ElementState;
 use winit::event::KeyboardInput;
 use winit::event::WindowEvent;
@@ -16,6 +21,7 @@ pub struct State {
     pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
     pub depth_texture: texture::Texture,
+    pub camera_bind_group_layout: BindGroupLayout,
 }
 
 impl State {
@@ -65,6 +71,21 @@ impl State {
         let depth_texture =
             texture::Texture::create_depth_texture(&device, &config, "depth_texture");
 
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+                label: Some("camera_bind_group_layout"),
+            });
+
         Self {
             surface,
             device,
@@ -72,12 +93,8 @@ impl State {
             config,
             size,
             depth_texture,
+            camera_bind_group_layout,
         }
-    }
-
-    pub fn get_texture(&self) -> texture::Texture {
-        let diffuse_bytes = include_bytes!("textures/lapis_block.png");
-        texture::Texture::from_bytes(&self.device, &self.queue, diffuse_bytes, "tex.png").unwrap()
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -135,73 +152,110 @@ impl State {
         }
     }
 
-    pub fn update(&mut self) {}
-
-    pub fn render(&mut self, cameras: Vec<&Camera>) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            }); // The encoder is responsible for sending commands to the GPU via a command buffer.
-        {
-            // Wrap encoder.begin_render_pass borrows 'encoder'so that the borrow is dropped and can be used later
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[
-                    // This is what [[location(0)]] in the fragment shader targets
-                    wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.3,
-                                g: 0.4,
-                                b: 0.6,
-                                a: 1.0,
-                            }),
-                            store: true,
-                        },
-                    },
-                ],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: true,
-                    }),
-                    stencil_ops: None,
-                }),
-            });
-
-            for camera in &cameras {
-                self.queue
-                    .write_buffer(&camera.buffer, 0, bytemuck::cast_slice(&[camera.uniform]));
-            }
-
-            for camera in &cameras {
-                for pass_data in &camera.render_passes {
-                    render_pass.set_pipeline(&pass_data.render_pipeline);
-                    render_pass.set_bind_group(0, &pass_data.diffuse_bind_group, &[]);
-                    render_pass.set_bind_group(1, &camera.bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, pass_data.vertex_buffer.slice(..));
-                    render_pass.set_index_buffer(
-                        pass_data.index_buffer.slice(..),
-                        wgpu::IndexFormat::Uint32,
-                    );
-
-                    render_pass.draw_indexed(0..pass_data.index_count, 0, 0..1);
-                }
-            }
+    pub fn render(&mut self, cameras: Vec<Arc<RwLock<Camera>>>) -> Result<(), wgpu::SurfaceError> {
+        for camera in &cameras {
+            let cam_lock = camera.read();
+            self.queue.write_buffer(
+                &cam_lock.buffer,
+                0,
+                bytemuck::cast_slice(&[cam_lock.uniform]),
+            );
         }
 
-        // submit will accept anything that implements IntoIter
-        self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        for camera in &cameras {
+            // Check if the camera has anything to draw before trying to draw
+            let camera_lock = camera.read();
+            if camera_lock.render_layers.len() == 0 {
+                continue;
+            }
+            let mut has_passes = true;
+            for layer in render_layers::RENDER_LAYERS.iter() {
+                let layer_lock = layer.read();
+                if layer_lock.passes.len() == 0 {
+                    has_passes = false;
+                    break;
+                }
+            }
+            if !has_passes {
+                continue;
+            }
+
+            // Camera has passes, draw them
+            let output = self.surface.get_current_texture()?;
+            let view = output
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Render Encoder"),
+                }); // The encoder is responsible for sending commands to the GPU via a command buffer.
+            {
+                let camera_lock = camera.read();
+
+                for layer in &camera_lock.render_layers {
+                    let layer = render_layers::get_layer_by_name(layer.to_string());
+                    let layer = match layer {
+                        Some(l) => l,
+                        None => continue,
+                    };
+                    let layer_lock = layer.read();
+                    for pass_data in &layer_lock.passes {
+                        let pass_lock = pass_data.read();
+                        let material_lock = pass_lock.material.read();
+                        let pipeline = Arc::clone(&material_lock.get_pipeline(self));
+                        let texture_bind_group =
+                            Arc::clone(&material_lock.get_texture_bind_group(self));
+                        // Wrap encoder.begin_render_pass borrows 'encoder'so that the borrow is dropped and can be used later
+                        let mut render_pass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("Render Pass"),
+                                color_attachments: &[
+                                    // This is what [[location(0)]] in the fragment shader targets
+                                    wgpu::RenderPassColorAttachment {
+                                        view: &view,
+                                        resolve_target: None,
+                                        ops: wgpu::Operations {
+                                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                                r: 0.3,
+                                                g: 0.4,
+                                                b: 0.6,
+                                                a: 1.0,
+                                            }),
+                                            store: true,
+                                        },
+                                    },
+                                ],
+                                depth_stencil_attachment: Some(
+                                    wgpu::RenderPassDepthStencilAttachment {
+                                        view: &self.depth_texture.view,
+                                        depth_ops: Some(wgpu::Operations {
+                                            load: wgpu::LoadOp::Clear(1.0),
+                                            store: true,
+                                        }),
+                                        stencil_ops: None,
+                                    },
+                                ),
+                            });
+                        render_pass.set_pipeline(&pipeline);
+                        render_pass.set_bind_group(0, &texture_bind_group, &[]);
+                        render_pass.set_bind_group(1, &camera_lock.bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, pass_lock.vertex_buffer.slice(..));
+                        render_pass.set_index_buffer(
+                            pass_lock.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+
+                        render_pass.draw_indexed(0..pass_lock.index_count, 0, 0..1);
+                    }
+                }
+            }
+
+            self.queue.submit(std::iter::once(encoder.finish()));
+            // submit will accept anything that implements IntoIter
+            output.present();
+        }
 
         Ok(())
     }

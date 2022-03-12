@@ -7,7 +7,8 @@ use crate::ecs::components::{
 
 #[system(for_each)]
 pub fn update_camera(pos: &Position, rot: &Rotation, camera: &mut Camera) {
-    camera.camera.position = pos.0;
-    camera.camera.rotation = rot.0;
-    camera.camera.update_uniform();
+    let mut cam_lock = camera.camera.write();
+    cam_lock.position = pos.0;
+    cam_lock.rotation = rot.0;
+    cam_lock.update_uniform();
 }
