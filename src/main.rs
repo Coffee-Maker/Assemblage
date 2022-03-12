@@ -1,6 +1,6 @@
 #![feature(int_roundings)]
 
-mod asset_providers;
+mod asset_types;
 mod ecs;
 mod input_manager;
 mod physics;
@@ -28,14 +28,19 @@ use legion::IntoQuery;
 use legion::{Resources, Schedule};
 use mimalloc::MiMalloc;
 use parking_lot::RwLock;
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use rendering::{
     material::{Material, MaterialDiffuseTexture},
-    render_pass_data::{create_render_pass, render_layers},
+    render_pass_data::render_layers,
     texture::Texture,
 };
 use state::*;
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 use time::Time;
 use voxels::voxel_scene::CHUNK_SIZE;
 
@@ -53,7 +58,7 @@ use winit::{
     window::WindowBuilder,
 };
 
-use crate::{rendering::mesh::Mesh, voxels::voxel_scene::VoxelScene};
+use crate::voxels::voxel_scene::VoxelScene;
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
@@ -99,8 +104,6 @@ async fn main() -> Result<(), ()> {
     // Create the default render layer
     render_layers::create_layer("Default".to_string());
 
-    let world_mesh = Arc::new(RwLock::new(Mesh::new()));
-
     let mut camera_lock = camera.write();
     camera_lock.add_render_layer("Default".to_string());
     drop(camera_lock);
@@ -111,15 +114,6 @@ async fn main() -> Result<(), ()> {
         Rotation(Quat::IDENTITY),
         Player { fly_speed: 50.0 },
         components::camera::Camera { camera },
-    ));
-    world_lock.legion_world.push((
-        Position(Vec3::ZERO),
-        Rotation(Quat::IDENTITY),
-        MeshRenderer {
-            mesh: Arc::clone(&world_mesh),
-            material: Arc::clone(&material),
-            render_layer: "Default".to_string(),
-        },
     ));
     drop(world_lock);
 
@@ -148,7 +142,12 @@ async fn main() -> Result<(), ()> {
 
     // Setup voxel scene
     let mut scene = VoxelScene::new();
-    generate_world(&mut scene, Arc::clone(&world_mesh), UVec3::new(50, 5, 50));
+    generate_world(
+        &mut scene,
+        Arc::clone(&world),
+        Arc::clone(&material),
+        UVec3::new(50, 5, 50),
+    );
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -206,7 +205,12 @@ async fn main() -> Result<(), ()> {
     });
 }
 
-pub fn generate_world(scene: &mut VoxelScene, world_mesh: Arc<RwLock<Mesh>>, size: UVec3) {
+pub fn generate_world(
+    scene: &mut VoxelScene,
+    world: Arc<RwLock<World>>,
+    material: Arc<RwLock<dyn Material>>,
+    size: UVec3,
+) {
     for x in 0..size.x {
         for y in 0..size.y {
             for z in 0..size.z {
@@ -219,52 +223,28 @@ pub fn generate_world(scene: &mut VoxelScene, world_mesh: Arc<RwLock<Mesh>>, siz
     scene.setup_chunk_processors(tx);
 
     rayon::spawn(move || {
-        let mut saved_meshes = HashMap::new();
+        //let mut saved_meshes = HashMap::new();
         loop {
-            let mut regenerate = false;
-            rx.try_iter().for_each(|(k, v)| {
-                saved_meshes.insert(k, v);
-                regenerate = true;
-            });
-            if !regenerate {
-                // Nothing to process, wait for something
-                let (k, v) = rx.recv().unwrap();
-                saved_meshes.insert(k, v);
-            }
-
-            let meshes = saved_meshes
-                .par_iter_mut()
-                .map(|(position, chunk)| {
-                    let mut mesh = chunk.clone();
-
-                    mesh.vertices.iter_mut().for_each(|vert| {
-                        vert.position = [
-                            vert.position[0] + (position.x as f32 * CHUNK_SIZE as f32),
-                            vert.position[1] + (position.y as f32 * CHUNK_SIZE as f32),
-                            vert.position[2] + (position.z as f32 * CHUNK_SIZE as f32),
-                        ]
-                    });
-
-                    mesh
-                })
-                .collect::<Vec<Mesh>>();
-            let mut combined_verts = Vec::new();
-            let mut combined_indices = Vec::new();
-            meshes
-                .into_iter()
-                .map(|mesh| (mesh.vertices, mesh.indices))
-                .for_each(|(mut verts, indics)| {
-                    let offset = combined_verts.len() as u32;
-
-                    combined_verts.append(&mut verts);
-
-                    combined_indices.reserve(indics.len());
-                    combined_indices.extend(indics.iter().map(|&x| x + offset));
-                });
-
-            let mut world_mesh_lock = world_mesh.write();
-            world_mesh_lock.vertices = combined_verts;
-            world_mesh_lock.indices = combined_indices;
+            let (mesh_pos, mesh) = rx.recv().unwrap();
+            let mut world_lock = world.write();
+            world_lock.legion_world.push((
+                Position(mesh_pos.as_vec3() * CHUNK_SIZE as f32),
+                Rotation(Quat::IDENTITY),
+                MeshRenderer::new(
+                    Arc::new(RwLock::new(mesh)),
+                    Arc::clone(&material),
+                    "Default".to_string(),
+                ),
+            ));
         }
     });
+}
+
+lazy_static! {
+    static ref CURRENT_ID: AtomicU64 = AtomicU64::new(0);
+}
+
+fn next_id() -> u64 {
+    CURRENT_ID.fetch_add(1, Ordering::Relaxed);
+    CURRENT_ID.load(Ordering::Relaxed)
 }

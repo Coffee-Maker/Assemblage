@@ -7,7 +7,7 @@ use glam::{IVec3, UVec3};
 use rayon::ThreadPool;
 use simdnoise::NoiseBuilder;
 
-use crate::rendering::mesh::Mesh;
+use crate::asset_types::mesh::Mesh;
 use crate::rendering::vertex::Vertex;
 use crate::voxels::voxel_data::VoxelData;
 use crate::voxels::voxel_shapes::voxel_shapes;
@@ -347,8 +347,8 @@ impl VoxelChunk {
 
         let mut mesh = Mesh::new();
 
-        mesh.vertices.append(&mut vertices);
-        mesh.indices.append(&mut indices);
+        mesh.append_vertices(&mut vertices);
+        mesh.append_indices(&mut indices);
 
         mesh
     }
@@ -407,27 +407,32 @@ fn generate_faces(
     };
 
     let mut append_mesh = |mesh: &Mesh| {
-        let index_offset = vertices.len();
+        let index_offset = vertices.len() as u32;
 
         let flip_x = voxel.shape.extract_flip_x();
         let flip_y = voxel.shape.extract_flip_y();
         let flip_z = voxel.shape.extract_flip_z();
         let flip_count = (flip_x as u32 + flip_y as u32 + flip_z as u32) % 2;
 
-        indices.reserve(mesh.indices.len());
-        for index in 0..mesh.indices.len() {
-            indices.push(
-                (if (flip_count & 1) == 0 {
-                    mesh.indices[index]
-                } else {
-                    mesh.indices[mesh.indices.len() - index - 1]
-                }) + index_offset as u32,
-            );
+        if flip_count & 1 == 0 {
+            let mut new_indices = mesh.get_indices().clone();
+            new_indices
+                .iter_mut()
+                .for_each(|index| *index += index_offset);
+            indices.append(&mut new_indices);
+        } else {
+            indices.reserve(mesh.index_count);
+            let mut new_indices = mesh.get_indices().clone();
+            new_indices
+                .iter_mut()
+                .for_each(|index| *index += index_offset);
+            new_indices.reverse();
+            indices.append(&mut new_indices);
         }
 
-        vertices.reserve(mesh.vertices.len());
+        vertices.reserve(mesh.vertex_count);
 
-        mesh.vertices.iter().for_each(|v| {
+        mesh.get_vertices().iter().for_each(|v| {
             let mut vert = v.clone();
             if flip_x {
                 vert.position[0] *= -1.0;

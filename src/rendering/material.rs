@@ -1,7 +1,7 @@
 use std::{fmt::Debug, sync::Arc};
 use wgpu::{BindGroup, BindGroupLayout, PrimitiveTopology, RenderPipeline, ShaderModule};
 
-use crate::state::State;
+use crate::{next_id, state::State};
 
 use super::{
     texture::{self, Texture},
@@ -13,6 +13,7 @@ pub trait Material: Debug + Sync + Send {
     fn get_texture_bind_group(&self, state: &State) -> Arc<BindGroup>;
     fn get_texture_bind_group_layout(&self, state: &State) -> Arc<BindGroupLayout>;
     fn get_shader(&self, state: &State) -> Arc<ShaderModule>;
+    fn get_id(&self) -> u64;
 }
 
 // Structs for the various kinds of materials
@@ -21,6 +22,7 @@ pub struct MaterialDiffuseTexture {
     pub diffuse_texture: Arc<Texture>,
     texture_bind_group: Option<Arc<BindGroup>>,
     pipeline: Option<Arc<RenderPipeline>>,
+    id: u64,
 }
 
 impl MaterialDiffuseTexture {
@@ -29,6 +31,7 @@ impl MaterialDiffuseTexture {
             diffuse_texture,
             texture_bind_group: None,
             pipeline: None,
+            id: next_id(),
         }
     }
 }
@@ -97,6 +100,10 @@ impl Material for MaterialDiffuseTexture {
                     source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/shader.wgsl").into()),
                 }),
         )
+    }
+
+    fn get_id(&self) -> u64 {
+        self.id
     }
 }
 

@@ -27,3 +27,4 @@ legion = "0.4.0"
 nalgebra = { version = "0.30.1", features = [ "convert-glam020" ] }
 rapier3d = { version = "*", features = [ "simd-stable" ] }
 parking_lot = "0.12.0"
+bus = "2.2.3"

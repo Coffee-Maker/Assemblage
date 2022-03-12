@@ -1,39 +1,51 @@
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 
+use dashmap::DashMap;
+use glam::{Mat4, Quat, Vec3};
 use legion::{IntoQuery, World};
 
 use crate::{
-    ecs::components::rendering_components::MeshRenderer,
-    rendering::render_pass_data::{create_render_pass, render_layers},
+    ecs::components::{rendering_components::MeshRenderer, transformation_components::Position},
+    rendering::{
+        material::Material,
+        render_pass_data::{create_render_pass, render_layers, RenderMesh, RenderPassData},
+    },
     state::State,
 };
 
-pub fn construct_buffers(state: &State, world: &World) {
-    // Clear passes
-    render_layers::RENDER_LAYERS.iter().for_each(|layer| {
-        let mut layer_lock = layer.write();
-        layer_lock.passes.clear();
-    });
+lazy_static! {
+    static ref PASSES: DashMap<u64, Arc<RenderPassData<dyn Material>>> = DashMap::new();
+}
 
-    // Loop through all mesh renderers and append their data to the pass buffers
-    // TODO: It is worth noting that this should only be done when there is a change
-    let mut query = <(&MeshRenderer)>::query();
-    query.iter(world).for_each(|mesh| {
-        let layer = render_layers::get_layer_by_name(mesh.render_layer.to_string());
+pub fn construct_buffers(state: &State, world: &World) {
+    // Loop through all mesh renderers and append their data to the pass buffers if their data is dirty
+    let mut query = <(&MeshRenderer, &Position)>::query();
+    query.iter(world).for_each(|(renderer, position)| {
+        if !renderer.dirty.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let mesh_lock = renderer.mesh.read();
+        if mesh_lock.vertex_count == 0 {
+            return;
+        }
+
+        let layer = render_layers::get_layer_by_name(renderer.render_layer.to_string());
         let layer = match layer {
             Some(layer) => layer,
             None => return,
         };
 
-        let mut pass = create_render_pass(state, Arc::clone(&mesh.material));
-        let mesh_lock = mesh.mesh.read();
-        if mesh_lock.vertices.len() == 0 {
-            return;
-        }
-
-        pass.set_indices(&state.device, &mesh_lock.indices);
-        pass.set_vertices(&state.device, &mesh_lock.vertices);
         let mut layer_lock = layer.write();
-        layer_lock.push_pass(pass);
+        let pass = layer_lock.get_or_create_pass(state, Arc::clone(&renderer.material));
+
+        let render_mesh = RenderMesh {
+            mesh: Arc::clone(&renderer.mesh),
+            transform: Mat4::from_scale_rotation_translation(Vec3::ONE, Quat::IDENTITY, position.0),
+        };
+
+        pass.write().insert_mesh(render_mesh);
+
+        renderer.dirty.store(false, Ordering::Relaxed)
     });
 }

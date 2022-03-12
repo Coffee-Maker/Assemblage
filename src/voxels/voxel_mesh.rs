@@ -1,4 +1,4 @@
-use crate::rendering::mesh::Mesh;
+use crate::asset_types::mesh::Mesh;
 
 use self::voxel_meshes::SHAPE_MESHES;
 
@@ -6,7 +6,7 @@ use super::voxel_shapes::VoxelShape;
 
 #[rustfmt::skip]
 mod voxel_meshes {
-    use crate::{rendering::{mesh::Mesh}, voxels::voxel_mesh::VoxelMesh};
+    use crate::{voxels::voxel_mesh::VoxelMesh, asset_types::mesh::Mesh};
 
     lazy_static! {
         pub static ref CUBE: VoxelMesh = VoxelMesh {
