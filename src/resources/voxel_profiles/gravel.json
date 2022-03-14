@@ -1,7 +1,0 @@
-{
-    "material": "voxels/dirt",
-    "decorations": [ "grass" ],
-    "state_names": [
-        "snow"
-    ]
-}

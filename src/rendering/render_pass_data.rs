@@ -1,15 +1,12 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
-use crate::{
-    asset_types::{asset::Asset, mesh::Mesh},
-    state::State,
-};
+use crate::{asset_types::mesh::Mesh, state::State};
 
-use super::{material::Material, vertex::Vertex};
-use flume::Receiver;
-use glam::{Mat4, Vec3};
+use wgpu::{BufferDescriptor, BufferUsages};
+
+use super::material::Material;
+use glam::Mat4;
 use parking_lot::RwLock;
-use wgpu::util::DeviceExt;
 
 // Render layers are a convenient way to filter what a camera renders
 // They also make for a convenient location to store render passes
@@ -81,74 +78,89 @@ pub mod render_layers {
 }
 
 #[derive(Debug)]
-pub struct RenderMesh {
-    pub mesh: Arc<RwLock<Mesh>>,
-    pub transform: Mat4,
+pub struct MeshBufferEntry {
+    pub vertex_start: usize,
+    pub vertex_length: usize,
+    pub index_start: usize,
+    pub index_length: usize,
+}
+
+#[derive(Debug)]
+pub struct MeshBuffer {
+    pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
+    pub vertex_offset: u64,
+    pub index_offset: u64,
+    pub vertex_count: u32,
+    pub index_count: u32,
+}
+
+impl MeshBuffer {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let vertex_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Vertex Buffer"),
+            size: 500_000_000, // 500mb (Maybe too much!)
+            usage: BufferUsages::COPY_DST | BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        });
+        let index_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Index Buffer"),
+            size: 500_000_000, // 500mb (Maybe too much!)
+            usage: BufferUsages::COPY_DST | BufferUsages::INDEX,
+            mapped_at_creation: false,
+        });
+        MeshBuffer {
+            vertex_buffer,
+            index_buffer,
+            vertex_offset: 0,
+            index_offset: 0,
+            vertex_count: 0,
+            index_count: 0,
+        }
+    }
+
+    pub fn insert_mesh(&mut self, state: &State, mesh: Arc<RwLock<Mesh>>, transform: &Mat4) {
+        let mesh_lock = mesh.read();
+        // Prepare data
+        let mut new_vertices = mesh_lock.get_vertices().clone();
+        new_vertices.iter_mut().for_each(|vertex| {
+            vertex.position = transform.transform_point3(vertex.position.into()).into();
+            // Transforming the normal is not always required, perhaps find a way to avoid doing this in those cases
+            vertex.normal = transform.transform_vector3(vertex.normal.into()).into();
+        });
+        let vertex_data = bytemuck::cast_slice(&new_vertices);
+
+        let mut new_indices = mesh_lock.get_indices().clone();
+        new_indices
+            .iter_mut()
+            .for_each(|index| *index += self.vertex_count);
+        let index_data = bytemuck::cast_slice(&new_indices);
+
+        // write data into buffers
+        state
+            .queue
+            .write_buffer(&self.vertex_buffer, self.vertex_offset, vertex_data);
+        state
+            .queue
+            .write_buffer(&self.index_buffer, self.index_offset, index_data);
+
+        self.vertex_offset += vertex_data.len() as u64;
+        self.index_offset += index_data.len() as u64;
+        self.vertex_count += mesh_lock.vertex_count as u32;
+        self.index_count += mesh_lock.index_count as u32;
+    }
 }
 
 #[derive(Debug)]
 pub struct RenderPassData<M: Material + ?Sized> {
     pub material: Arc<RwLock<M>>,
-    pub meshes: HashMap<u64, RenderMesh>,
-    pub vertex_buffer: wgpu::Buffer,
-    pub vertex_count: u32,
-    pub index_buffer: wgpu::Buffer,
-    pub index_count: u32,
+    pub buffer: MeshBuffer,
     pub id: u64,
-    pub dirty: bool,
 }
 
 impl RenderPassData<dyn Material> {
-    fn set_vertices(&mut self, device: &wgpu::Device, vertices: Vec<Vertex>) {
-        self.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        self.vertex_count = vertices.len() as u32;
-    }
-
-    fn set_indices(&mut self, device: &wgpu::Device, indices: Vec<u32>) {
-        self.index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        self.index_count = indices.len() as u32;
-    }
-
-    pub fn insert_mesh(&mut self, mesh: RenderMesh) {
-        let id = mesh.mesh.read().get_id();
-        self.meshes.insert(id, mesh);
-        self.dirty = true;
-    }
-
-    pub fn update_buffers(&mut self, device: &wgpu::Device) {
-        let mut combined_verts = Vec::new();
-        let mut combined_indices = Vec::new();
-        self.meshes.iter().for_each(|(_id, mesh)| {
-            let offset = combined_verts.len() as u32;
-            let mesh_lock = mesh.mesh.read();
-            combined_verts.reserve(mesh_lock.vertex_count);
-            combined_verts.append(
-                &mut mesh_lock
-                    .get_vertices()
-                    .iter()
-                    .map(|vertex| {
-                        let mut vert = vertex.clone();
-                        let vert_pos = mesh.transform.transform_point3(Vec3::from(vert.position));
-                        vert.position = vert_pos.to_array();
-                        vert
-                    })
-                    .collect(),
-            );
-
-            combined_indices.extend(mesh_lock.get_indices().iter().map(|&x| x + offset));
-        });
-        self.set_indices(device, combined_indices);
-        self.set_vertices(device, combined_verts);
-
-        self.dirty = false;
+    pub fn insert_mesh(&mut self, state: &State, mesh: Arc<RwLock<Mesh>>, transform: &Mat4) {
+        self.buffer.insert_mesh(state, mesh, transform)
     }
 }
 
@@ -157,35 +169,9 @@ pub fn create_render_pass(
     material: Arc<RwLock<dyn Material>>,
     pass_id: u64,
 ) -> RenderPassData<dyn Material> {
-    let vertex_buffer = state
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: &[],
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-    let index_buffer = state
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: &[],
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-    let vertex_count = 0;
-    let index_count = 0;
-
-    let meshes = HashMap::new();
-
     RenderPassData {
         material: Arc::clone(&material),
-        meshes,
-        vertex_buffer,
-        index_buffer,
-        vertex_count,
-        index_count,
         id: pass_id,
-        dirty: true,
+        buffer: MeshBuffer::new(&state.device),
     }
 }

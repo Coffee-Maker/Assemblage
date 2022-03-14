@@ -1,0 +1,19 @@
+{
+    "Samplers": [
+        {
+            "Type": "Simplex",
+            "Name": "Noise1",
+            "Wavelength": 50,
+            "Amplitude": 20
+        },
+        {
+            "Type": "Simplex",
+            "Name": "Noise2",
+            "Wavelength": 10,
+            "Amplitude": 3
+        }
+    ],
+    "Voxel Density": "Add(Noise1, Noise2)",
+    "Voxel Type": "Voxel(dirt)",
+    "Voxel Shape": "If(Less(Density, 0.5), SLAB, CUBE)"
+}

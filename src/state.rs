@@ -156,38 +156,17 @@ impl State {
     pub fn render(&mut self, cameras: Vec<Arc<RwLock<Camera>>>) -> Result<(), wgpu::SurfaceError> {
         for camera in &cameras {
             // Write the camera uniform into the buffer
-            let cam_lock = camera.read();
+            let camera_lock = camera.read();
             self.queue.write_buffer(
-                &cam_lock.buffer,
+                &camera_lock.buffer,
                 0,
-                bytemuck::cast_slice(&[cam_lock.uniform]),
+                bytemuck::cast_slice(&[camera_lock.uniform]),
             );
 
-            // Check if the camera has anything to draw before trying to draw
-            let camera_lock = camera.read();
-            if camera_lock.render_layers.len() == 0 {
-                self.surface.get_current_texture()?.present();
-                continue;
-            }
-            let mut has_passes = true;
-            for layer in render_layers::RENDER_LAYERS.iter() {
-                let layer_lock = layer.read();
-                if layer_lock.passes.len() == 0 {
-                    has_passes = false;
-                    break;
-                }
-            }
-            if !has_passes {
-                self.surface.get_current_texture()?.present();
-                continue;
-            }
-
-            // Camera has passes, draw them
             let output = self.surface.get_current_texture()?;
             let view = output
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
-            let camera_lock = camera.read();
 
             // Create a clear pass
             let mut encoder = self
@@ -223,6 +202,27 @@ impl State {
                 }),
             });
 
+            // Check if the camera has anything to draw before trying to draw
+            if camera_lock.render_layers.len() == 0 {
+                self.queue.submit(std::iter::once(encoder.finish()));
+                output.present();
+                continue;
+            }
+            let mut has_passes = true;
+            for layer in render_layers::RENDER_LAYERS.iter() {
+                let layer_lock = layer.read();
+                if layer_lock.passes.len() == 0 {
+                    has_passes = false;
+                    break;
+                }
+            }
+            if !has_passes {
+                self.queue.submit(std::iter::once(encoder.finish()));
+                output.present();
+                continue;
+            }
+
+            // Camera has passes, draw them
             for layer in &camera_lock.render_layers {
                 let layer = render_layers::get_layer_by_name(layer.to_string());
                 let layer = match layer {
@@ -234,10 +234,7 @@ impl State {
                 // Do a pass
                 for (_pass_id, pass_data) in &layer_lock.passes {
                     // Prepare data
-                    let mut pass_lock = pass_data.write();
-                    if pass_lock.dirty {
-                        pass_lock.update_buffers(&self.device);
-                    }
+                    let pass_lock = pass_data.write();
                     let material_lock = pass_lock.material.read();
                     let pipeline = Arc::clone(&material_lock.get_pipeline(self));
                     let texture_bind_group =
@@ -266,13 +263,15 @@ impl State {
                     render_pass.set_pipeline(&pipeline);
                     render_pass.set_bind_group(0, &texture_bind_group, &[]);
                     render_pass.set_bind_group(1, &camera_lock.bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, pass_lock.vertex_buffer.slice(..));
+                    render_pass.set_vertex_buffer(0, pass_lock.buffer.vertex_buffer.slice(..));
                     render_pass.set_index_buffer(
-                        pass_lock.index_buffer.slice(..),
+                        pass_lock.buffer.index_buffer.slice(..),
                         wgpu::IndexFormat::Uint32,
                     );
-
-                    render_pass.draw_indexed(0..pass_lock.index_count, 0, 0..1);
+                    // println!("Drawing mesh");
+                    // println!("{} vertices", pass_lock.buffer.vertex_count);
+                    // println!("{} indices", pass_lock.buffer.index_count);
+                    render_pass.draw_indexed(0..pass_lock.buffer.index_count, 0, 0..1);
                     drop(render_pass); // Required to release the borrow of encoder
                 }
             }

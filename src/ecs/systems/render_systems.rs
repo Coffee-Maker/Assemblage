@@ -8,7 +8,7 @@ use crate::{
     ecs::components::{rendering_components::MeshRenderer, transformation_components::Position},
     rendering::{
         material::Material,
-        render_pass_data::{create_render_pass, render_layers, RenderMesh, RenderPassData},
+        render_pass_data::{render_layers, RenderPassData},
     },
     state::State,
 };
@@ -39,13 +39,12 @@ pub fn construct_buffers(state: &State, world: &World) {
         let mut layer_lock = layer.write();
         let pass = layer_lock.get_or_create_pass(state, Arc::clone(&renderer.material));
 
-        let render_mesh = RenderMesh {
-            mesh: Arc::clone(&renderer.mesh),
-            transform: Mat4::from_scale_rotation_translation(Vec3::ONE, Quat::IDENTITY, position.0),
-        };
+        let transform =
+            Mat4::from_scale_rotation_translation(Vec3::ONE, Quat::IDENTITY, position.0);
 
-        pass.write().insert_mesh(render_mesh);
+        pass.write()
+            .insert_mesh(&state, Arc::clone(&renderer.mesh), &transform);
 
-        renderer.dirty.store(false, Ordering::Relaxed)
+        renderer.dirty.store(false, Ordering::Relaxed);
     });
 }

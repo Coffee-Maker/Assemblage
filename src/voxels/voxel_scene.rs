@@ -10,10 +10,11 @@ use simdnoise::NoiseBuilder;
 use crate::asset_types::mesh::Mesh;
 use crate::rendering::vertex::Vertex;
 use crate::voxels::voxel_data::VoxelData;
-use crate::voxels::voxel_shapes::voxel_shapes;
+use crate::voxels::voxel_shapes::voxel_shape;
 
 use super::voxel_mesh::get_voxel_mesh;
-use super::voxel_shapes::{voxel_directions, voxel_orientations, VoxelDirection, VoxelShape};
+use super::voxel_registry;
+use super::voxel_shapes::{voxel_directions, VoxelDirection, VoxelShape};
 
 pub const CHUNK_SIZE: u32 = 16;
 type ChunkMap = Arc<DashMap<IVec3, VoxelChunk, ahash::RandomState>>;
@@ -146,7 +147,7 @@ impl VoxelScene {
                 let mut chunk = VoxelChunk::new(*chunk_pos);
 
                 // Set chunk data
-                let base_wavelength = 500.0;
+                let base_wavelength = 200.0;
 
                 let chunk_pos_scenespace = chunk.scenespace_pos();
                 let (noise, _min, _max) = NoiseBuilder::fbm_3d_offset(
@@ -165,6 +166,7 @@ impl VoxelScene {
 
                 let range = 0.025; // fbm produces values up to ~0.02, or 1/50th of a block but as it has additive octaves, the value needs to be slightly larger
                 let height_blend = 40.0;
+                let avg_block_step_density = range / height_blend;
 
                 chunk
                     .voxels
@@ -179,13 +181,22 @@ impl VoxelScene {
                                 * (range / height_blend))
                             + range;
                         if density > 0.0 {
+                            // == The below data is to be used to construct the current voxel ==
+                            // Vertical depth
+                            // Current slope
+                            // Altitude
+                            // Density
+                            // Moisture level 
+
+                            // NOTE: Perhaps restructure the generation to build top to bottom, so that we can keep track of the current vertical depth
+
                             chunk.is_empty = false;
-                            voxel.shape = if density < (range / height_blend) * 0.5 {
-                                voxel_shapes::SLAB.oriented(voxel_orientations::BOTTOM)
+                            voxel.shape = voxel_shape::CUBE;
+                            if density > avg_block_step_density {
+                                voxel.id = 2;
                             } else {
-                                voxel_shapes::CUBE
-                            };
-                            voxel.id = 1;
+                                voxel.id = 1;
+                            }
                         }
                     });
 
@@ -269,7 +280,7 @@ impl VoxelChunk {
             is_empty: true,
             voxels: vec![
                 VoxelData {
-                    shape: voxel_shapes::CUBE,
+                    shape: voxel_shape::CUBE,
                     state: 0,
                     id: 0,
                 };
@@ -406,6 +417,10 @@ fn generate_faces(
         })
     };
 
+    let color = voxel_registry::get_voxel_by_id(voxel.id)
+        .unwrap()
+        .color
+        .into();
     let mut append_mesh = |mesh: &Mesh| {
         let index_offset = vertices.len() as u32;
 
@@ -434,6 +449,7 @@ fn generate_faces(
 
         mesh.get_vertices().iter().for_each(|v| {
             let mut vert = v.clone();
+            vert.color = color;
             if flip_x {
                 vert.position[0] *= -1.0;
                 vert.normal[0] *= -1.0;

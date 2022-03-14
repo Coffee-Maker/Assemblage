@@ -42,7 +42,9 @@ use std::{
     time::Instant,
 };
 use time::Time;
-use voxels::voxel_scene::CHUNK_SIZE;
+use voxels::{
+    biome_profile::get_biome_by_name, voxel_registry::get_voxel_by_name, voxel_scene::CHUNK_SIZE,
+};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -51,7 +53,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 extern crate lazy_static;
 extern crate nalgebra as na;
 
-use glam::{IVec3, Quat, UVec3, Vec3};
+use glam::{EulerRot, IVec3, Quat, UVec3, Vec3};
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -110,8 +112,13 @@ async fn main() -> Result<(), ()> {
 
     let mut world_lock = world.write();
     world_lock.legion_world.push((
-        Position(Vec3::ZERO),
-        Rotation(Quat::IDENTITY),
+        Position(Vec3::new(0.0, 80.0, 0.0)), // Middle of world
+        Rotation(Quat::from_euler(
+            EulerRot::XYZ,
+            0.0,
+            (45.0 as f32).to_radians(),
+            0.0,
+        )),
         Player { fly_speed: 50.0 },
         components::camera::Camera { camera },
     ));
@@ -146,7 +153,7 @@ async fn main() -> Result<(), ()> {
         &mut scene,
         Arc::clone(&world),
         Arc::clone(&material),
-        UVec3::new(50, 5, 50),
+        UVec3::new(20, 5, 20),
     );
 
     event_loop.run(move |event, _, control_flow| {

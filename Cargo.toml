@@ -28,3 +28,6 @@ nalgebra = { version = "0.30.1", features = [ "convert-glam020" ] }
 rapier3d = { version = "*", features = [ "simd-stable" ] }
 parking_lot = "0.12.0"
 bus = "2.2.3"
+serde_json = "1.0.59"
+multi-map = "1.3.0"
+noise = "0.7.0"

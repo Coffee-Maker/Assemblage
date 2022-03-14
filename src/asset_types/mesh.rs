@@ -41,7 +41,7 @@ impl Mesh {
 
         self.vertices.reserve(vertices.len());
 
-        let color = [0.5, 0.3, 0.2];
+        let color = [0.5, 0.3, 0.2, 1.0];
 
         vertices.iter().for_each(|position| {
             self.vertices.push(Vertex {
@@ -68,7 +68,7 @@ impl Mesh {
         ]);
         self.vertices.reserve(4);
 
-        let color = [0.5, 0.3, 0.2];
+        let color = [0.5, 0.3, 0.2, 1.0];
 
         // v0
         self.vertices.push(Vertex {
@@ -112,7 +112,7 @@ impl Mesh {
             .append(&mut vec![index_offset, index_offset + 2, index_offset + 1]);
         self.vertices.reserve(4);
 
-        let color = [0.8, 0.5, 0.3];
+        let color = [0.8, 0.5, 0.3, 1.0];
 
         // v0
         self.vertices.push(Vertex {
