@@ -61,11 +61,11 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
+use crate::rendering::mesh::Mesh;
 
 use crate::voxels::voxel_scene::VoxelScene;
 
-#[tokio::main]
-async fn main() -> Result<(), ()> {
+fn main() -> Result<(), ()> {
     env_logger::init(); // Tells WGPU to inform us of errors, rather than failing silently
 
     let event_loop = EventLoop::new();
@@ -241,7 +241,6 @@ pub fn generate_world(
 
     let (tx, rx) = flume::unbounded();
     scene.write().setup_chunk_processors(tx);
-
     rayon::spawn(move || {
         //let mut saved_meshes = HashMap::new();
         loop {
