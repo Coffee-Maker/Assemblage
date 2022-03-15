@@ -1,21 +1,13 @@
 use std::sync::{atomic::Ordering, Arc};
 
-use dashmap::DashMap;
 use glam::{Mat4, Quat, Vec3};
 use legion::{IntoQuery, World};
 
 use crate::{
     ecs::components::{rendering_components::MeshRenderer, transformation_components::Position},
-    rendering::{
-        material::Material,
-        render_pass_data::{render_layers, RenderPassData},
-    },
+    rendering::render_pass_data::render_layers,
     state::State,
 };
-
-lazy_static! {
-    static ref PASSES: DashMap<u64, Arc<RenderPassData<dyn Material>>> = DashMap::new();
-}
 
 pub fn construct_buffers(state: &State, world: &World) {
     // Loop through all mesh renderers and append their data to the pass buffers if their data is dirty
@@ -38,7 +30,6 @@ pub fn construct_buffers(state: &State, world: &World) {
 
         let mut layer_lock = layer.write();
         let pass = layer_lock.get_or_create_pass(state, Arc::clone(&renderer.material));
-
         let transform =
             Mat4::from_scale_rotation_translation(Vec3::ONE, Quat::IDENTITY, position.0);
 

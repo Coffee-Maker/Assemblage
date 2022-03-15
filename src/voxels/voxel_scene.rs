@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use dashmap::{DashMap, DashSet};
 use flume::{Receiver, Sender};
-use glam::{IVec3, UVec3};
+use glam::{IVec3, UVec3, Vec3};
 use rayon::ThreadPool;
-use simdnoise::NoiseBuilder;
 
 use crate::asset_types::mesh::Mesh;
 use crate::rendering::vertex::Vertex;
+use crate::voxels::biome_profile::{get_biome_by_name, SampleContext};
 use crate::voxels::voxel_data::VoxelData;
 use crate::voxels::voxel_shapes::voxel_shape;
 
@@ -147,56 +147,27 @@ impl VoxelScene {
                 let mut chunk = VoxelChunk::new(*chunk_pos);
 
                 // Set chunk data
-                let base_wavelength = 200.0;
-
+                let biome = get_biome_by_name("plains".to_string()).unwrap();
                 let chunk_pos_scenespace = chunk.scenespace_pos();
-                let (noise, _min, _max) = NoiseBuilder::fbm_3d_offset(
-                    chunk_pos_scenespace.x as f32,
-                    CHUNK_SIZE as usize,
-                    chunk_pos_scenespace.y as f32,
-                    CHUNK_SIZE as usize,
-                    chunk_pos_scenespace.z as f32,
-                    CHUNK_SIZE as usize,
-                )
-                .with_freq(1.0 / base_wavelength)
-                .with_octaves(2)
-                .with_lacunarity(5.0)
-                .with_gain(0.15)
-                .generate();
-
-                let range = 0.025; // fbm produces values up to ~0.02, or 1/50th of a block but as it has additive octaves, the value needs to be slightly larger
-                let height_blend = 40.0;
-                let avg_block_step_density = range / height_blend;
-
+                let mut context = SampleContext {
+                    position: chunk_pos_scenespace,
+                    slope: Vec3::ZERO,
+                    depth: 0.0,
+                    moisture: 0.0,
+                    temperature: 0.0,
+                    density: 0.0,
+                };
                 chunk
                     .voxels
                     .iter_mut()
                     .enumerate()
                     .for_each(|(index, voxel)| {
                         let voxel_pos = index_to_pos(index as u32);
-                        let density = noise
-                            .get(pos_to_index_inverse(&voxel_pos) as usize)
-                            .unwrap()
-                            - ((voxel_pos.y as i32 + chunk_pos_scenespace.y) as f32
-                                * (range / height_blend))
-                            + range;
-                        if density > 0.0 {
-                            // == The below data is to be used to construct the current voxel ==
-                            // Vertical depth
-                            // Current slope
-                            // Altitude
-                            // Density
-                            // Moisture level 
-
-                            // NOTE: Perhaps restructure the generation to build top to bottom, so that we can keep track of the current vertical depth
-
+                        context.position = voxel_pos.as_ivec3() + chunk_pos_scenespace;
+                        context.density = biome.sample_density(&context);
+                        if context.density > 0.0 {
                             chunk.is_empty = false;
-                            voxel.shape = voxel_shape::CUBE;
-                            if density > avg_block_step_density {
-                                voxel.id = 2;
-                            } else {
-                                voxel.id = 1;
-                            }
+                            *voxel = biome.sample_voxel(&context);
                         }
                     });
 

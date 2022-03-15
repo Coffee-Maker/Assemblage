@@ -3,11 +3,14 @@
 mod asset_types;
 mod ecs;
 mod input_manager;
+mod noise;
 mod physics;
 mod rendering;
 mod state;
 mod time;
 mod voxels;
+
+use crate::noise::simplex::Simplex1D;
 
 use ecs::{
     components::{
@@ -28,6 +31,7 @@ use legion::IntoQuery;
 use legion::{Resources, Schedule};
 use mimalloc::MiMalloc;
 use parking_lot::RwLock;
+use pollster::block_on;
 use rendering::{
     material::{Material, MaterialDiffuseTexture},
     render_pass_data::render_layers,
@@ -42,9 +46,7 @@ use std::{
     time::Instant,
 };
 use time::Time;
-use voxels::{
-    biome_profile::get_biome_by_name, voxel_registry::get_voxel_by_name, voxel_scene::CHUNK_SIZE,
-};
+use voxels::voxel_scene::CHUNK_SIZE;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -148,13 +150,22 @@ async fn main() -> Result<(), ()> {
     });
 
     // Setup voxel scene
-    let mut scene = VoxelScene::new();
+    let scene = Arc::new(RwLock::new(VoxelScene::new()));
     generate_world(
-        &mut scene,
+        Arc::clone(&scene),
         Arc::clone(&world),
         Arc::clone(&material),
-        UVec3::new(20, 5, 20),
+        UVec3::new(50, 5, 50),
     );
+
+    let state_clone = Arc::clone(&state);
+    rayon::spawn(move || {
+        let noise = block_on(Simplex1D::build_noise(
+            &state_clone.read(),
+            &UVec3::new(16, 16, 16),
+        ));
+        //noise.iter().for_each(|v| println!("{v}"));
+    });
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -213,7 +224,7 @@ async fn main() -> Result<(), ()> {
 }
 
 pub fn generate_world(
-    scene: &mut VoxelScene,
+    scene: Arc<RwLock<VoxelScene>>,
     world: Arc<RwLock<World>>,
     material: Arc<RwLock<dyn Material>>,
     size: UVec3,
@@ -221,13 +232,15 @@ pub fn generate_world(
     for x in 0..size.x {
         for y in 0..size.y {
             for z in 0..size.z {
-                scene.initialize_and_generate_chunk(IVec3::new(x as i32, y as i32, z as i32));
+                scene
+                    .write()
+                    .initialize_and_generate_chunk(IVec3::new(x as i32, y as i32, z as i32));
             }
         }
     }
 
     let (tx, rx) = flume::unbounded();
-    scene.setup_chunk_processors(tx);
+    scene.write().setup_chunk_processors(tx);
 
     rayon::spawn(move || {
         //let mut saved_meshes = HashMap::new();
