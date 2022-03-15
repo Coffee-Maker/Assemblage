@@ -3,8 +3,6 @@ name = "graphics-test"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 image = "0.23"
 winit = "0.26"
@@ -17,8 +15,15 @@ bytemuck = { version = "1.4", features = [ "derive" ] }
 anyhow = "1.0"
 glam = "0.20.2"
 rand = "0.8.5"
-num_cpus = "1.13.1"
 rayon = "1.5.1"
-noise = "0.7.0"
-futures = "0.3"
-once_cell = "1.9.0"
+simdnoise = "3.1.6"
+tokio = { version = "1", features = ["full"] }
+mimalloc = { version = "0.1.28", default-features = false }
+flume = "0.10.11"
+lazy_static = "1.4.0"
+dashmap = "5.1"
+ahash = "0.7"
+legion = "0.4.0"
+nalgebra = { version = "0.30.1", features = [ "convert-glam020" ] }
+rapier3d = { version = "*", features = [ "simd-stable" ] }
+parking_lot = "0.12.0"

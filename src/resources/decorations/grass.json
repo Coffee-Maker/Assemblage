@@ -1,0 +1,7 @@
+{
+    "type": "condition_chain",
+    "chain": [
+        "grass_top",
+        "grass_sides"
+    ]
+}
