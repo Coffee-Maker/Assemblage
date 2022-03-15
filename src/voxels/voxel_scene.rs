@@ -3,17 +3,18 @@ use std::sync::Arc;
 
 use dashmap::{DashMap, DashSet};
 use flume::{Receiver, Sender};
-use glam::{IVec3, UVec3};
+use glam::{IVec3, UVec3, Vec3};
 use rayon::ThreadPool;
-use simdnoise::NoiseBuilder;
 
-use crate::rendering::mesh::Mesh;
+use crate::asset_types::mesh::Mesh;
 use crate::rendering::vertex::Vertex;
+use crate::voxels::biome_profile::{get_biome_by_name, SampleContext};
 use crate::voxels::voxel_data::VoxelData;
-use crate::voxels::voxel_shapes::voxel_shapes;
+use crate::voxels::voxel_shapes::voxel_shape;
 
 use super::voxel_mesh::get_voxel_mesh;
-use super::voxel_shapes::{voxel_directions, voxel_orientations, VoxelDirection, VoxelShape};
+use super::voxel_registry;
+use super::voxel_shapes::{voxel_directions, VoxelDirection, VoxelShape};
 
 pub const CHUNK_SIZE: u32 = 16;
 type ChunkMap = Arc<DashMap<IVec3, VoxelChunk, ahash::RandomState>>;
@@ -146,46 +147,27 @@ impl VoxelScene {
                 let mut chunk = VoxelChunk::new(*chunk_pos);
 
                 // Set chunk data
-                let base_wavelength = 500.0;
-
+                let biome = get_biome_by_name("plains".to_string()).unwrap();
                 let chunk_pos_scenespace = chunk.scenespace_pos();
-                let (noise, _min, _max) = NoiseBuilder::fbm_3d_offset(
-                    chunk_pos_scenespace.x as f32,
-                    CHUNK_SIZE as usize,
-                    chunk_pos_scenespace.y as f32,
-                    CHUNK_SIZE as usize,
-                    chunk_pos_scenespace.z as f32,
-                    CHUNK_SIZE as usize,
-                )
-                .with_freq(1.0 / base_wavelength)
-                .with_octaves(2)
-                .with_lacunarity(5.0)
-                .with_gain(0.15)
-                .generate();
-
-                let range = 0.025; // fbm produces values up to ~0.02, or 1/50th of a block but as it has additive octaves, the value needs to be slightly larger
-                let height_blend = 40.0;
-
+                let mut context = SampleContext {
+                    position: chunk_pos_scenespace,
+                    slope: Vec3::ZERO,
+                    depth: 0.0,
+                    moisture: 0.0,
+                    temperature: 0.0,
+                    density: 0.0,
+                };
                 chunk
                     .voxels
                     .iter_mut()
                     .enumerate()
                     .for_each(|(index, voxel)| {
                         let voxel_pos = index_to_pos(index as u32);
-                        let density = noise
-                            .get(pos_to_index_inverse(&voxel_pos) as usize)
-                            .unwrap()
-                            - ((voxel_pos.y as i32 + chunk_pos_scenespace.y) as f32
-                                * (range / height_blend))
-                            + range;
-                        if density > 0.0 {
+                        context.position = voxel_pos.as_ivec3() + chunk_pos_scenespace;
+                        context.density = biome.sample_density(&context);
+                        if context.density > 0.0 {
                             chunk.is_empty = false;
-                            voxel.shape = if density < (range / height_blend) * 0.5 {
-                                voxel_shapes::SLAB.oriented(voxel_orientations::BOTTOM)
-                            } else {
-                                voxel_shapes::CUBE
-                            };
-                            voxel.id = 1;
+                            *voxel = biome.sample_voxel(&context);
                         }
                     });
 
@@ -269,7 +251,7 @@ impl VoxelChunk {
             is_empty: true,
             voxels: vec![
                 VoxelData {
-                    shape: voxel_shapes::CUBE,
+                    shape: voxel_shape::CUBE,
                     state: 0,
                     id: 0,
                 };
@@ -347,8 +329,8 @@ impl VoxelChunk {
 
         let mut mesh = Mesh::new();
 
-        mesh.vertices.append(&mut vertices);
-        mesh.indices.append(&mut indices);
+        mesh.append_vertices(&mut vertices);
+        mesh.append_indices(&mut indices);
 
         mesh
     }
@@ -406,29 +388,39 @@ fn generate_faces(
         })
     };
 
+    let color = voxel_registry::get_voxel_by_id(voxel.id)
+        .unwrap()
+        .color
+        .into();
     let mut append_mesh = |mesh: &Mesh| {
-        let index_offset = vertices.len();
+        let index_offset = vertices.len() as u32;
 
         let flip_x = voxel.shape.extract_flip_x();
         let flip_y = voxel.shape.extract_flip_y();
         let flip_z = voxel.shape.extract_flip_z();
         let flip_count = (flip_x as u32 + flip_y as u32 + flip_z as u32) % 2;
 
-        indices.reserve(mesh.indices.len());
-        for index in 0..mesh.indices.len() {
-            indices.push(
-                (if (flip_count & 1) == 0 {
-                    mesh.indices[index]
-                } else {
-                    mesh.indices[mesh.indices.len() - index - 1]
-                }) + index_offset as u32,
-            );
+        if flip_count & 1 == 0 {
+            let mut new_indices = mesh.get_indices().clone();
+            new_indices
+                .iter_mut()
+                .for_each(|index| *index += index_offset);
+            indices.append(&mut new_indices);
+        } else {
+            indices.reserve(mesh.index_count);
+            let mut new_indices = mesh.get_indices().clone();
+            new_indices
+                .iter_mut()
+                .for_each(|index| *index += index_offset);
+            new_indices.reverse();
+            indices.append(&mut new_indices);
         }
 
-        vertices.reserve(mesh.vertices.len());
+        vertices.reserve(mesh.vertex_count);
 
-        mesh.vertices.iter().for_each(|v| {
+        mesh.get_vertices().iter().for_each(|v| {
             let mut vert = v.clone();
+            vert.color = color;
             if flip_x {
                 vert.position[0] *= -1.0;
                 vert.normal[0] *= -1.0;

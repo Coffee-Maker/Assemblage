@@ -1,175 +1,176 @@
 use glam::IVec3;
+mod occlussion_shapes {
+    const CUBE: [u8; 6] = [
+        0b_1111_1111, // North
+        0b_1111_1111, // South
+        0b_1111_1111, // East
+        0b_1111_1111, // West
+        0b_1111_1111, // Top
+        0b_1111_1111, // Bottom
+    ];
 
-const CUBE: [u8; 6] = [
-    0b_1111_1111, // North
-    0b_1111_1111, // South
-    0b_1111_1111, // East
-    0b_1111_1111, // West
-    0b_1111_1111, // Top
-    0b_1111_1111, // Bottom
-];
+    const STAIR: [u8; 6] = [
+        0b_1111_1111, // North
+        0b_1100_0011, // South
+        0b_1111_0011, // East
+        0b_1111_0011, // West
+        0b_0011_1100, // Top
+        0b_1111_1111, // Bottom
+    ];
 
-const STAIR: [u8; 6] = [
-    0b_1111_1111, // North
-    0b_1100_0011, // South
-    0b_1111_0011, // East
-    0b_1111_0011, // West
-    0b_0011_1100, // Top
-    0b_1111_1111, // Bottom
-];
+    const CORNER_STAIR: [u8; 6] = [
+        0b_1111_1111, // North
+        0b_1100_1111, // South
+        0b_1111_1111, // East
+        0b_1111_0011, // West
+        0b_1111_1100, // Top
+        0b_1111_1111, // Bottom
+    ];
 
-const CORNER_STAIR: [u8; 6] = [
-    0b_1111_1111, // North
-    0b_1100_1111, // South
-    0b_1111_1111, // East
-    0b_1111_0011, // West
-    0b_1111_1100, // Top
-    0b_1111_1111, // Bottom
-];
+    const SLAB: [u8; 6] = [
+        0b_1100_0011, // North
+        0b_1100_0011, // South
+        0b_1100_0011, // East
+        0b_1100_0011, // West
+        0b_0000_0000, // Top
+        0b_1111_1111, // Bottom
+    ];
 
-const SLAB: [u8; 6] = [
-    0b_1100_0011, // North
-    0b_1100_0011, // South
-    0b_1100_0011, // East
-    0b_1100_0011, // West
-    0b_0000_0000, // Top
-    0b_1111_1111, // Bottom
-];
+    const INNER_PRISM_JUNCTION: [u8; 6] = [
+        0b_1111_1111, // North
+        0b_1000_0111, // South
+        0b_1111_1111, // East
+        0b_1110_0001, // West
+        0b_0111_1000, // Top
+        0b_1111_1111, // Bottom
+    ];
 
-const INNER_PRISM_JUNCTION: [u8; 6] = [
-    0b_1111_1111, // North
-    0b_1000_0111, // South
-    0b_1111_1111, // East
-    0b_1110_0001, // West
-    0b_0111_1000, // Top
-    0b_1111_1111, // Bottom
-];
+    const INNER_CORNER_PRISM: [u8; 6] = [
+        0b_1111_1111, // North
+        0b_1000_0111, // South
+        0b_1111_1111, // East
+        0b_1110_0001, // West
+        0b_0000_0000, // Top
+        0b_1111_1111, // Bottom
+    ];
 
-const INNER_CORNER_PRISM: [u8; 6] = [
-    0b_1111_1111, // North
-    0b_1000_0111, // South
-    0b_1111_1111, // East
-    0b_1110_0001, // West
-    0b_0000_0000, // Top
-    0b_1111_1111, // Bottom
-];
+    const OUTER_CORNER_PRISM: [u8; 6] = [
+        0b_1000_0111, // North
+        0b_0000_0000, // South
+        0b_1110_0001, // East
+        0b_0000_0000, // West
+        0b_0000_0000, // Top
+        0b_1111_1111, // Bottom
+    ];
 
-const OUTER_CORNER_PRISM: [u8; 6] = [
-    0b_1000_0111, // North
-    0b_0000_0000, // South
-    0b_1110_0001, // East
-    0b_0000_0000, // West
-    0b_0000_0000, // Top
-    0b_1111_1111, // Bottom
-];
+    const PRISM: [u8; 6] = [
+        0b_1111_1111, // North
+        0b_0000_0000, // South
+        0b_1110_0001, // East
+        0b_1110_0001, // West
+        0b_0000_0000, // Top
+        0b_1111_1111, // Bottom
+    ];
 
-const PRISM: [u8; 6] = [
-    0b_1111_1111, // North
-    0b_0000_0000, // South
-    0b_1110_0001, // East
-    0b_1110_0001, // West
-    0b_0000_0000, // Top
-    0b_1111_1111, // Bottom
-];
+    const SHAPES: [[u8; 6]; 8] = [
+        CUBE,
+        STAIR,
+        CORNER_STAIR,
+        SLAB,
+        INNER_PRISM_JUNCTION,
+        INNER_CORNER_PRISM,
+        OUTER_CORNER_PRISM,
+        PRISM,
+    ];
 
-const SHAPES: [[u8; 6]; 8] = [
-    CUBE,
-    STAIR,
-    CORNER_STAIR,
-    SLAB,
-    INNER_PRISM_JUNCTION,
-    INNER_CORNER_PRISM,
-    OUTER_CORNER_PRISM,
-    PRISM,
-];
-
-lazy_static! {
-    pub static ref SHAPE_ORIENTATIONS: Box<[u8; 1536]> = Box::new(get_shape_permutations());
-}
-
-fn get_shape_permutations() -> [u8; 1536] {
-    let mut r = [0; 1536];
-
-    for i in 0_u8..255 {
-        let mut shape = SHAPES[(i << 5 >> 5) as usize]; // 32 rotations per shape
-
-        // Iterate through all possible permutations of the orientation, assigning it to a NOT RANDOM spot in the orientation array
-        if i & 0b_0000_1000 != 0 {
-            shape = flip_east_west(shape);
-        }
-        if i & 0b_0001_0000 != 0 {
-            shape = flip_top_bottom(shape);
-        }
-        if i & 0b_0010_0000 != 0 {
-            shape = flip_north_south(shape);
-        }
-        if i & 0b_0100_0000 != 0 {
-            shape = rotate_x(shape);
-        }
-        if i & 0b_1000_0000 != 0 {
-            shape = rotate_z(shape);
-        }
-        for b in 0..6 {
-            r[((i as usize) * 6) + b] = shape[b];
-        }
+    lazy_static! {
+        pub static ref SHAPE_ORIENTATIONS: Box<[u8; 1536]> = Box::new(get_shape_permutations());
     }
 
-    r
-}
+    fn get_shape_permutations() -> [u8; 1536] {
+        let mut r = [0; 1536];
 
-fn flip_north_south(sides: [u8; 6]) -> [u8; 6] {
-    let mut r = [0; 6];
-    r[0] = sides[1].reverse_bits(); // North
-    r[1] = sides[0].reverse_bits(); // South
-    r[2] = sides[2].reverse_bits(); // East
-    r[3] = sides[3].reverse_bits(); // West
-    r[4] = sides[4].reverse_bits().rotate_left(4); // Top
-    r[5] = sides[5].reverse_bits().rotate_left(4); // Bottom
-    r
-}
+        for i in 0_u8..255 {
+            let mut shape = SHAPES[(i << 5 >> 5) as usize]; // 32 rotations per shape
 
-fn flip_east_west(sides: [u8; 6]) -> [u8; 6] {
-    let mut r = [0; 6];
-    r[0] = sides[1].reverse_bits(); // North
-    r[1] = sides[0].reverse_bits(); // South
-    r[2] = sides[3].reverse_bits(); // East
-    r[3] = sides[2].reverse_bits(); // West
-    r[4] = sides[4].reverse_bits(); // Top
-    r[5] = sides[5].reverse_bits(); // Bottom
-    r
-}
+            // Iterate through all possible permutations of the orientation, assigning it to a NOT RANDOM spot in the orientation array
+            if i & 0b_0000_1000 != 0 {
+                shape = flip_east_west(shape);
+            }
+            if i & 0b_0001_0000 != 0 {
+                shape = flip_top_bottom(shape);
+            }
+            if i & 0b_0010_0000 != 0 {
+                shape = flip_north_south(shape);
+            }
+            if i & 0b_0100_0000 != 0 {
+                shape = rotate_x(shape);
+            }
+            if i & 0b_1000_0000 != 0 {
+                shape = rotate_z(shape);
+            }
+            for b in 0..6 {
+                r[((i as usize) * 6) + b] = shape[b];
+            }
+        }
 
-fn flip_top_bottom(sides: [u8; 6]) -> [u8; 6] {
-    let mut r = [0; 6];
-    r[0] = sides[0].reverse_bits().rotate_left(4); // North
-    r[1] = sides[1].reverse_bits().rotate_left(4); // South
-    r[2] = sides[2].reverse_bits().rotate_left(4); // East
-    r[3] = sides[3].reverse_bits().rotate_left(4); // West
-    r[4] = sides[5].reverse_bits(); // Top
-    r[5] = sides[4].reverse_bits(); // Bottom
-    r
-}
+        r
+    }
 
-fn rotate_x(sides: [u8; 6]) -> [u8; 6] {
-    let mut r = [0; 6];
-    r[0] = sides[5]; // North
-    r[1] = sides[4]; // South
-    r[2] = sides[2].rotate_right(2); // East
-    r[3] = sides[3].rotate_right(2); // West
-    r[4] = sides[0]; // Top
-    r[5] = sides[1]; // Bottom
-    r
-}
+    fn flip_north_south(sides: [u8; 6]) -> [u8; 6] {
+        let mut r = [0; 6];
+        r[0] = sides[1].reverse_bits(); // North
+        r[1] = sides[0].reverse_bits(); // South
+        r[2] = sides[2].reverse_bits(); // East
+        r[3] = sides[3].reverse_bits(); // West
+        r[4] = sides[4].reverse_bits().rotate_left(4); // Top
+        r[5] = sides[5].reverse_bits().rotate_left(4); // Bottom
+        r
+    }
 
-fn rotate_z(sides: [u8; 6]) -> [u8; 6] {
-    let mut r = [0; 6];
-    r[0] = sides[0].rotate_right(2); // North
-    r[1] = sides[1].rotate_right(2); // South
-    r[2] = sides[4]; // East
-    r[3] = sides[5]; // West
-    r[4] = sides[2]; // Top
-    r[5] = sides[3]; // Bottom
-    r
+    fn flip_east_west(sides: [u8; 6]) -> [u8; 6] {
+        let mut r = [0; 6];
+        r[0] = sides[1].reverse_bits(); // North
+        r[1] = sides[0].reverse_bits(); // South
+        r[2] = sides[3].reverse_bits(); // East
+        r[3] = sides[2].reverse_bits(); // West
+        r[4] = sides[4].reverse_bits(); // Top
+        r[5] = sides[5].reverse_bits(); // Bottom
+        r
+    }
+
+    fn flip_top_bottom(sides: [u8; 6]) -> [u8; 6] {
+        let mut r = [0; 6];
+        r[0] = sides[0].reverse_bits().rotate_left(4); // North
+        r[1] = sides[1].reverse_bits().rotate_left(4); // South
+        r[2] = sides[2].reverse_bits().rotate_left(4); // East
+        r[3] = sides[3].reverse_bits().rotate_left(4); // West
+        r[4] = sides[5].reverse_bits(); // Top
+        r[5] = sides[4].reverse_bits(); // Bottom
+        r
+    }
+
+    fn rotate_x(sides: [u8; 6]) -> [u8; 6] {
+        let mut r = [0; 6];
+        r[0] = sides[5]; // North
+        r[1] = sides[4]; // South
+        r[2] = sides[2].rotate_right(2); // East
+        r[3] = sides[3].rotate_right(2); // West
+        r[4] = sides[0]; // Top
+        r[5] = sides[1]; // Bottom
+        r
+    }
+
+    fn rotate_z(sides: [u8; 6]) -> [u8; 6] {
+        let mut r = [0; 6];
+        r[0] = sides[0].rotate_right(2); // North
+        r[1] = sides[1].rotate_right(2); // South
+        r[2] = sides[4]; // East
+        r[3] = sides[5]; // West
+        r[4] = sides[2]; // Top
+        r[5] = sides[3]; // Bottom
+        r
+    }
 }
 
 pub struct OrientedVoxelDirections {
@@ -289,7 +290,7 @@ mod direction_tests {
 
 #[allow(dead_code)]
 #[rustfmt::skip]
-pub mod voxel_shapes {
+pub mod voxel_shape {
     use super::VoxelShape;
 
     pub const CUBE: VoxelShape                  = VoxelShape { data: 0 };
@@ -318,7 +319,8 @@ pub struct VoxelShape {
 
 impl VoxelShape {
     pub fn get_face_shape(shape: VoxelShape, direction: VoxelDirection) -> u8 {
-        SHAPE_ORIENTATIONS[(((shape.data as u32) * 6) + direction.data as u32) as usize]
+        occlussion_shapes::SHAPE_ORIENTATIONS
+            [(((shape.data as u32) * 6) + direction.data as u32) as usize]
     }
 
     pub fn face_contains(&self, face: VoxelDirection, other: (VoxelShape, VoxelDirection)) -> bool {

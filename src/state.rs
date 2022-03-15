@@ -9,6 +9,7 @@ use crate::rendering::render_pass_data::render_layers;
 use crate::rendering::texture;
 use parking_lot::RwLock;
 use wgpu::BindGroupLayout;
+use wgpu::RenderPassDepthStencilAttachment;
 use winit::event::ElementState;
 use winit::event::KeyboardInput;
 use winit::event::WindowEvent;
@@ -154,18 +155,57 @@ impl State {
 
     pub fn render(&mut self, cameras: Vec<Arc<RwLock<Camera>>>) -> Result<(), wgpu::SurfaceError> {
         for camera in &cameras {
-            let cam_lock = camera.read();
-            self.queue.write_buffer(
-                &cam_lock.buffer,
-                0,
-                bytemuck::cast_slice(&[cam_lock.uniform]),
-            );
-        }
-
-        for camera in &cameras {
-            // Check if the camera has anything to draw before trying to draw
+            // Write the camera uniform into the buffer
             let camera_lock = camera.read();
+            self.queue.write_buffer(
+                &camera_lock.buffer,
+                0,
+                bytemuck::cast_slice(&[camera_lock.uniform]),
+            );
+
+            let output = self.surface.get_current_texture()?;
+            let view = output
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+
+            // Create a clear pass
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Render Encoder"),
+                }); // The encoder is responsible for sending commands to the GPU via a command buffer.
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[
+                    // This is what [[location(0)]] in the fragment shader targets
+                    wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.3,
+                                g: 0.4,
+                                b: 0.6,
+                                a: 1.0,
+                            }),
+                            store: true,
+                        },
+                    },
+                ],
+                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: true,
+                    }),
+                    stencil_ops: None,
+                }),
+            });
+
+            // Check if the camera has anything to draw before trying to draw
             if camera_lock.render_layers.len() == 0 {
+                self.queue.submit(std::iter::once(encoder.finish()));
+                output.present();
                 continue;
             }
             let mut has_passes = true;
@@ -177,83 +217,67 @@ impl State {
                 }
             }
             if !has_passes {
+                self.queue.submit(std::iter::once(encoder.finish()));
+                output.present();
                 continue;
             }
 
             // Camera has passes, draw them
-            let output = self.surface.get_current_texture()?;
-            let view = output
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
+            for layer in &camera_lock.render_layers {
+                let layer = render_layers::get_layer_by_name(layer.to_string());
+                let layer = match layer {
+                    Some(l) => l,
+                    None => continue,
+                };
+                let layer_lock = layer.read();
 
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Render Encoder"),
-                }); // The encoder is responsible for sending commands to the GPU via a command buffer.
-            {
-                let camera_lock = camera.read();
+                // Do a pass
+                for (_pass_id, pass_data) in &layer_lock.passes {
+                    // Prepare data
+                    let pass_lock = pass_data.write();
+                    let material_lock = pass_lock.material.read();
+                    let pipeline = Arc::clone(&material_lock.get_pipeline(self));
+                    let texture_bind_group =
+                        Arc::clone(&material_lock.get_texture_bind_group(self));
 
-                for layer in &camera_lock.render_layers {
-                    let layer = render_layers::get_layer_by_name(layer.to_string());
-                    let layer = match layer {
-                        Some(l) => l,
-                        None => continue,
-                    };
-                    let layer_lock = layer.read();
-                    for pass_data in &layer_lock.passes {
-                        let pass_lock = pass_data.read();
-                        let material_lock = pass_lock.material.read();
-                        let pipeline = Arc::clone(&material_lock.get_pipeline(self));
-                        let texture_bind_group =
-                            Arc::clone(&material_lock.get_texture_bind_group(self));
-                        // Wrap encoder.begin_render_pass borrows 'encoder'so that the borrow is dropped and can be used later
-                        let mut render_pass =
-                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("Render Pass"),
-                                color_attachments: &[
-                                    // This is what [[location(0)]] in the fragment shader targets
-                                    wgpu::RenderPassColorAttachment {
-                                        view: &view,
-                                        resolve_target: None,
-                                        ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                                r: 0.3,
-                                                g: 0.4,
-                                                b: 0.6,
-                                                a: 1.0,
-                                            }),
-                                            store: true,
-                                        },
-                                    },
-                                ],
-                                depth_stencil_attachment: Some(
-                                    wgpu::RenderPassDepthStencilAttachment {
-                                        view: &self.depth_texture.view,
-                                        depth_ops: Some(wgpu::Operations {
-                                            load: wgpu::LoadOp::Clear(1.0),
-                                            store: true,
-                                        }),
-                                        stencil_ops: None,
-                                    },
-                                ),
-                            });
-                        render_pass.set_pipeline(&pipeline);
-                        render_pass.set_bind_group(0, &texture_bind_group, &[]);
-                        render_pass.set_bind_group(1, &camera_lock.bind_group, &[]);
-                        render_pass.set_vertex_buffer(0, pass_lock.vertex_buffer.slice(..));
-                        render_pass.set_index_buffer(
-                            pass_lock.index_buffer.slice(..),
-                            wgpu::IndexFormat::Uint32,
-                        );
-
-                        render_pass.draw_indexed(0..pass_lock.index_count, 0, 0..1);
-                    }
+                    // Create the pass
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Render Pass"),
+                        color_attachments: &[wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: true,
+                            },
+                        }],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.depth_texture.view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: true,
+                            }),
+                            stencil_ops: None,
+                        }),
+                    });
+                    render_pass.set_pipeline(&pipeline);
+                    render_pass.set_bind_group(0, &texture_bind_group, &[]);
+                    render_pass.set_bind_group(1, &camera_lock.bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, pass_lock.buffer.vertex_buffer.slice(..));
+                    render_pass.set_index_buffer(
+                        pass_lock.buffer.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    // println!("Drawing mesh");
+                    // println!("{} vertices", pass_lock.buffer.vertex_count);
+                    // println!("{} indices", pass_lock.buffer.index_count);
+                    render_pass.draw_indexed(0..pass_lock.buffer.index_count, 0, 0..1);
+                    drop(render_pass); // Required to release the borrow of encoder
                 }
             }
 
-            self.queue.submit(std::iter::once(encoder.finish()));
             // submit will accept anything that implements IntoIter
+            self.queue.submit(std::iter::once(encoder.finish()));
             output.present();
         }
 

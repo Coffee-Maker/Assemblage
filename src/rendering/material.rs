@@ -1,7 +1,7 @@
 use std::{fmt::Debug, sync::Arc};
 use wgpu::{BindGroup, BindGroupLayout, PrimitiveTopology, RenderPipeline, ShaderModule};
 
-use crate::state::State;
+use crate::{next_id, state::State};
 
 use super::{
     texture::{self, Texture},
@@ -13,29 +13,28 @@ pub trait Material: Debug + Sync + Send {
     fn get_texture_bind_group(&self, state: &State) -> Arc<BindGroup>;
     fn get_texture_bind_group_layout(&self, state: &State) -> Arc<BindGroupLayout>;
     fn get_shader(&self, state: &State) -> Arc<ShaderModule>;
+    fn get_id(&self) -> u64;
 }
 
 // Structs for the various kinds of materials
 #[derive(Debug)]
 pub struct MaterialDiffuseTexture {
     pub diffuse_texture: Arc<Texture>,
-    texture_bind_group: Option<Arc<BindGroup>>,
-    pipeline: Option<Arc<RenderPipeline>>,
+    id: u64,
 }
 
 impl MaterialDiffuseTexture {
     pub fn new(state: &State, diffuse_texture: Arc<Texture>) -> MaterialDiffuseTexture {
         MaterialDiffuseTexture {
             diffuse_texture,
-            texture_bind_group: None,
-            pipeline: None,
+            id: next_id(),
         }
     }
 }
 
+// TODO: Cache the pipeline
 impl Material for MaterialDiffuseTexture {
     fn get_pipeline(&self, state: &State) -> Arc<RenderPipeline> {
-        // TODO: Cache the pipeline in PIPELINES
         Arc::new(create_pipeline(
             state,
             self.get_texture_bind_group_layout(state),
@@ -43,6 +42,7 @@ impl Material for MaterialDiffuseTexture {
         ))
     }
 
+    // TODO: Cache this too!
     fn get_texture_bind_group(&self, state: &State) -> Arc<BindGroup> {
         Arc::new(state.device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &self.get_texture_bind_group_layout(state),
@@ -60,6 +60,7 @@ impl Material for MaterialDiffuseTexture {
         }))
     }
 
+    // TODO: And this!
     fn get_texture_bind_group_layout(&self, state: &State) -> Arc<BindGroupLayout> {
         Arc::new(
             state
@@ -88,6 +89,7 @@ impl Material for MaterialDiffuseTexture {
         )
     }
 
+    // TODO: And also finally this!
     fn get_shader(&self, state: &State) -> Arc<ShaderModule> {
         Arc::new(
             state
@@ -97,6 +99,10 @@ impl Material for MaterialDiffuseTexture {
                     source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/shader.wgsl").into()),
                 }),
         )
+    }
+
+    fn get_id(&self) -> u64 {
+        self.id
     }
 }
 

@@ -58,15 +58,8 @@ fn fs_main(in: VertexOutput) -> [[location(0)]] vec4<f32> {
 
     var shading: f32 = light_dot;
 
-    var specular_intensity: f32 = clamp(dot(light_dir, reflect(normalize(in.position - in.camera_position), in.normal)), 0.0, 1.0);
-    specular_intensity = pow(specular_intensity, 2.0) * 0.0;
-    
-    var metalicity = 1.0;
-    var specular_color: vec4<f32> = lerp4(specular_intensity * vec4<f32>(1.0, 1.0, 1.0, 1.0), specular_intensity * col, metalicity); // Blend metalic
-    specular_color.a = 0.0;
-
     col = vec4<f32>(col.xyz * (shading + ambient_light), 1.0);
-    col = col + specular_color;
+    col = col;
 
     return col;
 }

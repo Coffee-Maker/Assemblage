@@ -1,0 +1,30 @@
+{
+    "Samplers": [
+        {
+            "Type": "Simplex",
+            "Name": "Noise1",
+            "Wavelength": 50,
+            "Amplitude": 20
+        },
+        {
+            "Type": "Simplex",
+            "Name": "Noise2",
+            "Wavelength": 10,
+            "Amplitude": 3
+        },
+        {
+            "Type": "Simplex",
+            "Name": "Noise3",
+            "Wavelength": 2,
+            "Amplitude": 2
+        },
+        {
+            "Type": "Formula",
+            "Name": "MyFormula",
+            "Formula": "Sub(Sub(Add(Noise1, Noise2), Div(Y, 2)), Sub(Y, 15))"
+        }
+    ],
+    "Voxel Density": "Sub(5, Y)",
+    "Voxel Type": "Voxel(dirt)",
+    "Voxel Shape": "CUBE"
+}
