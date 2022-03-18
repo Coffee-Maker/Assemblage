@@ -10,12 +10,11 @@ mod state;
 mod time;
 mod voxels;
 
-use crate::noise::simplex::Simplex1D;
-
 use ecs::{
     components::{
         self,
         camera::Camera,
+        physics_components::{body_components::DynamicBody, collider_components::MeshCollider},
         player_components::Player,
         rendering_components::MeshRenderer,
         transformation_components::{Position, Rotation},
@@ -31,7 +30,9 @@ use legion::IntoQuery;
 use legion::{Resources, Schedule};
 use mimalloc::MiMalloc;
 use parking_lot::RwLock;
+use physics::physics_scene::PhysicsScene;
 use pollster::block_on;
+use rapier3d::prelude::ColliderBuilder;
 use rendering::{
     material::{Material, MaterialDiffuseTexture},
     render_pass_data::render_layers,
@@ -61,11 +62,10 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
-use crate::rendering::mesh::Mesh;
 
 use crate::voxels::voxel_scene::VoxelScene;
 
-fn main() -> Result<(), ()> {
+fn main() {
     env_logger::init(); // Tells WGPU to inform us of errors, rather than failing silently
 
     let event_loop = EventLoop::new();
@@ -75,7 +75,7 @@ fn main() -> Result<(), ()> {
         .build(&event_loop)
         .unwrap();
 
-    let state = Arc::new(RwLock::new(State::new(&window).await));
+    let state = Arc::new(RwLock::new(block_on(State::new(&window))));
 
     // Setup entity world
     let state_clone = Arc::clone(&state);
@@ -83,6 +83,7 @@ fn main() -> Result<(), ()> {
     let world = Arc::new(RwLock::new(World {
         legion_world: legion::World::default(),
     }));
+    let physics_scene = Arc::new(RwLock::new(PhysicsScene::new()));
 
     let state_lock = state_clone.write();
     let camera = Arc::new(RwLock::new(rendering::camera::Camera::new(&state_lock)));
@@ -123,6 +124,10 @@ fn main() -> Result<(), ()> {
         )),
         Player { fly_speed: 50.0 },
         components::camera::Camera { camera },
+        DynamicBody::new(
+            ColliderBuilder::ball(1.0).build(),
+            Arc::clone(&physics_scene),
+        ),
     ));
     drop(world_lock);
 
@@ -154,18 +159,20 @@ fn main() -> Result<(), ()> {
     generate_world(
         Arc::clone(&scene),
         Arc::clone(&world),
+        Arc::clone(&physics_scene),
         Arc::clone(&material),
-        UVec3::new(50, 5, 50),
+        UVec3::new(25, 5, 25),
     );
 
-    let state_clone = Arc::clone(&state);
-    rayon::spawn(move || {
-        let noise = block_on(Simplex1D::build_noise(
-            &state_clone.read(),
-            &UVec3::new(16, 16, 16),
-        ));
-        //noise.iter().for_each(|v| println!("{v}"));
-    });
+    //let state_clone = Arc::clone(&state);
+    //rayon::spawn(move || {
+    //    let state_lock = state_clone.read();
+    //    let simplex = Simplex3D::new(&state_lock, UVec3::new(128, 128, 128));
+    //    let now = Instant::now();
+    //    let noise = block_on(simplex.build_noise(&state_lock));
+    //    println!("Obtained noise in {:?}", now.elapsed());
+    //    //noise.iter().for_each(|v| println!("{v}"));
+    //});
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -226,6 +233,7 @@ fn main() -> Result<(), ()> {
 pub fn generate_world(
     scene: Arc<RwLock<VoxelScene>>,
     world: Arc<RwLock<World>>,
+    physics_scene: Arc<RwLock<PhysicsScene>>,
     material: Arc<RwLock<dyn Material>>,
     size: UVec3,
 ) {
@@ -246,14 +254,16 @@ pub fn generate_world(
         loop {
             let (mesh_pos, mesh) = rx.recv().unwrap();
             let mut world_lock = world.write();
+            let mesh = Arc::new(RwLock::new(mesh));
             world_lock.legion_world.push((
                 Position(mesh_pos.as_vec3() * CHUNK_SIZE as f32),
                 Rotation(Quat::IDENTITY),
                 MeshRenderer::new(
-                    Arc::new(RwLock::new(mesh)),
+                    Arc::clone(&mesh),
                     Arc::clone(&material),
                     "Default".to_string(),
                 ),
+                MeshCollider::new(Arc::clone(&mesh), Arc::clone(&physics_scene)),
             ));
         }
     });

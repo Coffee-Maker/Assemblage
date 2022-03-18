@@ -77,10 +77,21 @@ impl BiomeProfile {
             fields.insert(
                 field_name,
                 match field_type {
-                    "Simplex" => Arc::new(Box::new(SimplexInstruction::new(
-                        field.get("Wavelength").unwrap().as_f64().unwrap() as f32,
-                        field.get("Amplitude").unwrap().as_f64().unwrap() as f32,
-                    ))),
+                    "Simplex" => {
+                        let offset = field.get("Offset").map_or(Vec3::ZERO, |offset_field| {
+                            let arr = offset_field.as_array().unwrap();
+                            Vec3::new(
+                                arr.get(0).unwrap().as_f64().unwrap() as f32,
+                                arr.get(1).unwrap().as_f64().unwrap() as f32,
+                                arr.get(2).unwrap().as_f64().unwrap() as f32,
+                            )
+                        });
+                        Arc::new(Box::new(SimplexInstruction::new_offseted(
+                            field.get("Wavelength").unwrap().as_f64().unwrap() as f32,
+                            field.get("Amplitude").unwrap().as_f64().unwrap() as f32,
+                            offset,
+                        )))
+                    }
                     "Formula" => build_f32_instruction(
                         field.get("Formula").unwrap().as_str().unwrap().to_string(),
                         &fields,
@@ -135,6 +146,7 @@ impl BiomeProfile {
 mod instructions {
     use std::sync::Arc;
 
+    use glam::Vec3;
     use noise::{NoiseFn, Perlin};
 
     use super::SampleContext;
@@ -289,6 +301,7 @@ mod instructions {
     pub struct SimplexInstruction {
         frequency: f32,
         amplitude: f32,
+        offset: Vec3,
     }
 
     impl SimplexInstruction {
@@ -296,6 +309,14 @@ mod instructions {
             Self {
                 frequency: 1.0 / wavelength,
                 amplitude,
+                offset: Vec3::ZERO,
+            }
+        }
+        pub fn new_offseted(wavelength: f32, amplitude: f32, offset: Vec3) -> Self {
+            Self {
+                frequency: 1.0 / wavelength,
+                amplitude,
+                offset,
             }
         }
     }
@@ -307,9 +328,9 @@ mod instructions {
     impl Instruction<f32> for SimplexInstruction {
         fn process(&self, context: &SampleContext) -> f32 {
             PERLIN.get([
-                (context.position.x as f32 * self.frequency) as f64,
-                (context.position.y as f32 * self.frequency) as f64,
-                (context.position.z as f32 * self.frequency) as f64,
+                ((context.position.x as f32 + self.offset.x) * self.frequency) as f64,
+                ((context.position.y as f32 + self.offset.y) * self.frequency) as f64,
+                ((context.position.z as f32 + self.offset.z) * self.frequency) as f64,
             ]) as f32
                 * self.amplitude
         }

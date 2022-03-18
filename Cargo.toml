@@ -17,7 +17,6 @@ glam = "0.20.2"
 rand = "0.8.5"
 rayon = "1.5.1"
 simdnoise = "3.1.6"
-tokio = { version = "1", features = ["full"] }
 mimalloc = { version = "0.1.28", default-features = false }
 flume = "0.10.11"
 lazy_static = "1.4.0"

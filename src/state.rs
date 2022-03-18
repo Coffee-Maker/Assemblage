@@ -61,7 +61,7 @@ impl State {
             format: surface.get_preferred_format(&adapter).unwrap(),
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Fifo, // Fifo effectively acts like VSync, I don't know why.
+            present_mode: wgpu::PresentMode::Immediate,
         };
         surface.configure(&device, &config);
 

@@ -7,6 +7,7 @@ use crate::{
         player_components::Player,
         transformation_components::{Position, Rotation},
     },
+    ecs::components::physics_components::body_components::DynamicBody,
     input_manager::{self, get_mouse_delta},
     time::Time,
 };
@@ -16,6 +17,7 @@ pub fn update_players(
     pos: &mut Position,
     rot: &mut Rotation,
     player: &Player,
+    body: &mut DynamicBody,
     #[resource] time: &Time,
 ) {
     let mut forward: Vec3 = rot.0.mul_vec3(Vec3::Z).into();
@@ -24,27 +26,27 @@ pub fn update_players(
     let up: Vec3 = Vec3::Y;
 
     if input_manager::get_key(VirtualKeyCode::W) {
-        pos.0 += forward * time.delta_time as f32 * player.fly_speed;
+        body.apply_force(forward * time.delta_time as f32 * player.fly_speed);
     }
 
     if input_manager::get_key(VirtualKeyCode::S) {
-        pos.0 -= forward * time.delta_time as f32 * player.fly_speed;
+        body.apply_force(-1.0 * forward * time.delta_time as f32 * player.fly_speed);
     }
 
     if input_manager::get_key(VirtualKeyCode::D) {
-        pos.0 += right * time.delta_time as f32 * player.fly_speed;
+        body.apply_force(right * time.delta_time as f32 * player.fly_speed);
     }
 
     if input_manager::get_key(VirtualKeyCode::A) {
-        pos.0 -= right * time.delta_time as f32 * player.fly_speed;
+        body.apply_force(-1.0 * right * time.delta_time as f32 * player.fly_speed);
     }
 
     if input_manager::get_key(VirtualKeyCode::Space) {
-        pos.0 += up * time.delta_time as f32 * player.fly_speed;
+        body.apply_force(up * time.delta_time as f32 * player.fly_speed);
     }
 
     if input_manager::get_key(VirtualKeyCode::LShift) {
-        pos.0 -= up * time.delta_time as f32 * player.fly_speed;
+        body.apply_force(-1.0 * up * time.delta_time as f32 * player.fly_speed);
     }
 
     if input_manager::get_button(MouseButton::Right) {
@@ -52,4 +54,6 @@ pub fn update_players(
         rot.0 = Quat::from_axis_angle(right, delta.y) * rot.0;
         rot.0 = Quat::from_axis_angle(up, delta.x) * rot.0;
     }
+
+    pos.0 = body.get_transform().0;
 }

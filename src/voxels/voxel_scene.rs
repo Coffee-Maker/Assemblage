@@ -188,7 +188,9 @@ impl VoxelScene {
             let chunk = (*chunks.get(&chunk_pos).unwrap()).clone();
             let chunks_clone = Arc::clone(&chunks);
             let mesh = chunk.generate_mesh(chunks_clone);
-            mesh_sender.send((chunk_pos, mesh)).unwrap();
+            if let Some(mesh) = mesh {
+                mesh_sender.send((chunk_pos, mesh)).unwrap();
+            }
         }
     }
 
@@ -302,7 +304,8 @@ impl VoxelChunk {
         self.voxel_at_mut(position).shape = shape
     }
 
-    pub fn generate_mesh(&self, scene_chunks: ChunkMap) -> Mesh {
+    /// Returns None if no geometry was generated
+    pub fn generate_mesh(&self, scene_chunks: ChunkMap) -> Option<Mesh> {
         let mut vertices = vec![];
         let mut indices = vec![];
 
@@ -327,12 +330,16 @@ impl VoxelChunk {
             }
         }
 
+        if vertices.len() == 0 {
+            return None;
+        }
+
         let mut mesh = Mesh::new();
 
         mesh.append_vertices(&mut vertices);
         mesh.append_indices(&mut indices);
 
-        mesh
+        Some(mesh)
     }
 
     pub fn scenespace_pos(&self) -> IVec3 {
@@ -349,10 +356,6 @@ fn index_to_pos(index: u32) -> UVec3 {
 
 pub fn pos_to_index(pos: &UVec3) -> u32 {
     (pos.x * CHUNK_SIZE * CHUNK_SIZE) + (pos.y * CHUNK_SIZE) + pos.z
-}
-
-pub fn pos_to_index_inverse(pos: &UVec3) -> u32 {
-    (pos.z * CHUNK_SIZE * CHUNK_SIZE) + (pos.y * CHUNK_SIZE) + pos.x
 }
 
 #[inline(always)]

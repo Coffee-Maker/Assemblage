@@ -4,27 +4,21 @@
             "Type": "Simplex",
             "Name": "Noise1",
             "Wavelength": 50,
-            "Amplitude": 20
+            "Amplitude": 10
         },
         {
             "Type": "Simplex",
             "Name": "Noise2",
-            "Wavelength": 10,
-            "Amplitude": 3
+            "Wavelength": 20,
+            "Amplitude": 5
         },
         {
-            "Type": "Simplex",
-            "Name": "Noise3",
-            "Wavelength": 2,
-            "Amplitude": 2
-        },
-        {
+            "Name": "Density",
             "Type": "Formula",
-            "Name": "MyFormula",
-            "Formula": "Sub(Sub(Add(Noise1, Noise2), Div(Y, 2)), Sub(Y, 15))"
+            "Formula": "Sub(Add(Noise2, Noise1), Sub(Y, 15))"
         }
     ],
-    "Voxel Density": "Sub(5, Y)",
-    "Voxel Type": "Voxel(dirt)",
+    "Voxel Density": "Noise1",
+    "Voxel Type": "Voxel(stone)",
     "Voxel Shape": "CUBE"
 }

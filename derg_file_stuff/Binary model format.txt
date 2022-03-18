@@ -1,3 +1,4 @@
+SPECS FOR DERG FILE (Divided and Easy to Read Geometry)
 Version                 <-- LEB128  <| For compatibility! :D
 Config                  <-- 1 byte  <| Bits determine what data is stored: [Postions, Colors, UVs, Normals, Triangles, Groups, Motions, Keyframes]
 Objects length          <-- LEB128

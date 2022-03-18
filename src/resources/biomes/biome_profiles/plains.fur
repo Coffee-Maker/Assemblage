@@ -1,0 +1,38 @@
+import "global_variables"
+
+x = 10
+y = 15
+z = x + y
+
+SurfaceMaterial = Voxel::dirt
+
+sampler Noise1 {
+    Simplex {
+        Frequency: 100
+        Amplitude: 20
+    } 
+    +
+    Simplex {
+        Frequency: 50
+        Amplitude: 5
+    }
+}
+
+sampler Noise2 {
+    Noise1 {
+        Offset: [0, 1, 0]
+    }
+}
+
+// Comments too!
+
+function GetDensity(X, Y) {
+    voxel = X > 2 ? SurfaceMaterial : Voxel::stone
+    return voxel
+}
+
+Output {
+    Density: Noise1 + Noise2
+    Type: SurfaceMaterial
+    Shape: Shape::Cube
+}
